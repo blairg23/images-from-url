@@ -78,7 +78,8 @@ url_list = 'urls.txt'
 with open(url_list, 'r') as infile:
     for url in infile.readlines():
         page = 1 # For multiple pages
-        original_url = url.rstrip() # Strip that nasty \n               
+        original_url = url.rstrip() # Strip that nasty \n       
+        title = original_url.split('/')[-1].rstrip() # Strip that nasty \n      
         while requests.get(original_url).status_code == 200:
             gallery_urls = retrieve_gallery_urls(url=original_url, class_name='track') # This class name signifies a gallery (in this case, 'track')
             get_gallery_images(gallery_urls=gallery_urls)
