@@ -23,7 +23,7 @@ def dump_image_files(url_list=None, folder_name=None, gallery_title=None):
             else:
                 print 'File already exists, ignoring.'
 
-def retrieve_image_urls_from_source(source_file=None, class_name=None, debug=False):
+def retrieve_image_urls_from_source(source_file=None, class_name=None, bad_class_name=None, debug=False):
     '''
     Given an html or text document, will find all image urls (png and jpg only) and return them.
     ''' 
@@ -37,12 +37,13 @@ def retrieve_image_urls_from_source(source_file=None, class_name=None, debug=Fal
     if debug:
         print soup.prettify()
     pass
+    for link in soup.find_all('img'):
+        if link.get('class') is not None and bad_class_name not in link.get('class') and class_name in link.get('class'):
+            link.get('data-src')
+    
+        #   if 'galleries' in link.get('href'):
+        #       galleries.append(link.get('href'))
 
-    for link in soup.find_all('a'):
-        if link.get('class') is not None and class_name in link.get('class'):
-            if 'galleries' in link.get('href'):
-                galleries.append(link.get('href'))
-                    
     # for link in soup.find_all('a'):
     #   if '.jpg' in link.get('href') or '.png' in link.get('href'):
     #       images.append(link.get('href'))
@@ -142,8 +143,10 @@ def get_galleries_from_list(url_list='data/gallery_urls.json'):
 
 
 source_file = 'data/source.html'
-title = 'suicide-girls'
-retrieve_image_urls_from_source(source_file=source_file, folder_name=title)
+#title = 'suicide-girls'
+class_name = 'unloaded' # The class we are searching for that contains images
+bad_class_name = 'thumb-title' # The class of unwanted images (likely thumbnails)
+print retrieve_image_urls_from_source(source_file=source_file, class_name=class_name, bad_class_name=bad_class_name)
 
 
 #get_images_from_list()
