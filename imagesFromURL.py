@@ -25,7 +25,7 @@ def dump_image_files(url_list=None, folder_name=None, gallery_title=None):
                 with open(full_path, 'wb') as out_file: # Then write to it              
                     out_file.write(response.content)
             else:
-                print 'File already exists, ignoring.'
+                print image_name + ' already exists, ignoring.'
 
 def retrieve_image_urls_from_source(source_file=None, class_name=None, bad_class_name=None, debug=False):
     '''
@@ -90,12 +90,12 @@ def get_gallery_images(gallery_urls=None, gallery_title=None):
     for url in url_list:
         original_url = url.rstrip() # Strip that nasty \n
         title = original_url.split('/')[-1].rstrip() # Strip that nasty \n      
-        print original_url
+        print 'original_url ' + original_url
         print title
         full_path = os.path.join('images', gallery_title, title)
         print full_path
         if os.path.exists(full_path):
-            print 'Folder already exists, ignoring.'
+            print 'Folder already exists, ignoring.\n'
         else:
             image_urls = retrieve_image_urls_from_url(url=original_url)
             dump_image_files(url_list=image_urls, folder_name=title, gallery_title=gallery_title)
