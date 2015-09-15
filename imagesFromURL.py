@@ -1,6 +1,7 @@
 import requests
 import os
 import json
+from pprint import pprint
 
 from bs4 import BeautifulSoup
 
@@ -88,11 +89,16 @@ def get_gallery_images(gallery_urls=None, gallery_title=None):
     url_list = gallery_urls # File with list of urls
     for url in url_list:
         original_url = url.rstrip() # Strip that nasty \n
-        title = original_url.split('/')[-1].rstrip() # Strip that nasty \n
+        title = original_url.split('/')[-1].rstrip() # Strip that nasty \n      
         print original_url
         print title
-        image_urls = retrieve_image_urls_from_url(url=original_url)
-        dump_image_files(url_list=image_urls, folder_name=title, gallery_title=gallery_title)
+        full_path = os.path.join('images', gallery_title, title)
+        print full_path
+        if os.path.exists(full_path):
+            print 'Folder already exists, ignoring.'
+        else:
+            image_urls = retrieve_image_urls_from_url(url=original_url)
+            dump_image_files(url_list=image_urls, folder_name=title, gallery_title=gallery_title)
 
 
 def retrieve_gallery_urls(url=None, class_name=None, debug=False):
@@ -129,7 +135,18 @@ def get_galleries_from_list(url_list='data/gallery_urls.json'):
     '''
     Retrieve images from a list of gallery urls.
     '''
-    print json.dumps(url_list)
+    with open(url_list) as infile:
+        #pprint(json.load(infile))
+        url_list = json.load(infile)
+        for url in url_list['urls']:
+            page = 1 # For multiple pages
+            original_url = url['url']
+            title = url['title']
+            while requests.get(original_url).status_code == 200: # As long as we're working with a real url
+                gallery_urls = retrieve_gallery_urls(url=original_url, class_name='track') # This class name signifies a gallery (in this case, 'track')
+                get_gallery_images(gallery_urls=gallery_urls, gallery_title=title)
+                original_url += '?page='+str(page)              
+
     # with open(url_list, 'r') as infile:
     #   for url in infile.readlines():
     #       page = 1 # For multiple pages
