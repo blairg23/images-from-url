@@ -11,8 +11,11 @@ def dump_image_files(url_list=None, folder_name=None):
             full_path = os.path.join('images', folder_name, image_name)
             if not os.path.exists(os.path.dirname(full_path)): # If the folder doesn't exist yet,
                 os.makedirs(os.path.dirname(full_path)) # Create it
-            with open(full_path, 'wb') as out_file: # Then write to it              
-                out_file.write(response.content)
+            if not os.path.isfile(full_path):
+                with open(full_path, 'wb') as out_file: # Then write to it              
+                    out_file.write(response.content)
+            else:
+                print 'File already exists, ignoring.'
 
 def retrieve_image_urls(url=None, debug=False):
     images = []
@@ -42,22 +45,13 @@ def get_gallery_images(gallery_urls=None):
         title = original_url.split('/')[-1].rstrip() # Strip that nasty \n
         print original_url
         print title
-    #   image_urls = retrieve_image_urls(url=original_url)
-    #   dump_image_files(url_list=image_urls, folder_name=title)
-    # with open(url_list, 'r') as infile:
-    #   for url in infile.readlines():
-    #       original_url = url.rstrip() # Strip that nasty \n
-    #       # numberOfPages = 1
-    #       title = original_url.split('/')[-1].rstrip() # Strip that nasty \n
-    #       print original_url
-    #       print title
-    #       image_urls = retrieve_image_urls(url=original_url)
-    #       dump_image_files(url_list=image_urls, folder_name=title)
+        image_urls = retrieve_image_urls(url=original_url)
+        dump_image_files(url_list=image_urls, folder_name=title)
 
 
 def retrieve_gallery_urls(url=None, class_name=None, debug=False):
-    gallery_urls = []
-    html_file = requests.get(url)
+    galleries = []  
+    html_file = requests.get(url)   
     soup = BeautifulSoup(html_file.content, 'html.parser')
 
     if debug:
@@ -66,12 +60,26 @@ def retrieve_gallery_urls(url=None, class_name=None, debug=False):
     for link in soup.find_all('a'):
         if link.get('class') is not None and class_name in link.get('class'):
             if 'galleries' in link.get('href'):
-                gallery_urls.append(link.get('href'))
+                galleries.append(link.get('href'))
+    
+    gallery_urls = []
+    url = url.split('/')[2] 
+    for gallery in galleries:
+        if gallery[0] == '/': # If the image url is a relative link         
+            gallery_url = 'http://'+url+gallery # Add the original url as a prefix
+        else:
+            gallery_url = gallery
+        gallery_urls.append(str(gallery_url))
+
     return gallery_urls
 
 url_list = 'urls.txt'
 
 with open(url_list, 'r') as infile:
     for url in infile.readlines():
-        original_url = url.rstrip() # Strip that nasty \n       
-        galleries = retrieve_gallery_urls(url=original_url, class_name='track') # This class name signifies a gallery (in this case, 'track')
+        page = 1 # For multiple pages
+        original_url = url.rstrip() # Strip that nasty \n               
+        while requests.get(original_url).status_code == 200:
+            gallery_urls = retrieve_gallery_urls(url=original_url, class_name='track') # This class name signifies a gallery (in this case, 'track')
+            get_gallery_images(gallery_urls=gallery_urls)
+            original_url += '?page='+str(page)
