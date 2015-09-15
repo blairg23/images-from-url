@@ -12,9 +12,12 @@ def dump_image_files(url_list=None, folder_name=None, gallery_title=None):
     '''
     for url in url_list:
         response = requests.get(url, stream=True)
-        if response.status_code == 200:
-            image_name = url.split('/')[-1].rstrip()
-            full_path = os.path.join('images', gallery_title, folder_name, image_name)
+        if response.status_code == 200: 
+            image_name = url.split('/')[-1].rstrip()                                
+            if gallery_title is not None: # If we supplied a gallery_title,
+                full_path = os.path.join('images', gallery_title, folder_name, image_name) # Then use it
+            else:               
+                full_path = os.path.join('images', folder_name, image_name)
             if not os.path.exists(os.path.dirname(full_path)): # If the folder doesn't exist yet,
                 os.makedirs(os.path.dirname(full_path)) # Create it
             if not os.path.isfile(full_path):
@@ -39,21 +42,11 @@ def retrieve_image_urls_from_source(source_file=None, class_name=None, bad_class
     pass
     for link in soup.find_all('img'):
         if link.get('class') is not None and bad_class_name not in link.get('class') and class_name in link.get('class'):
-            link.get('data-src')
+            images.append(link.get('data-src'))
     
-        #   if 'galleries' in link.get('href'):
-        #       galleries.append(link.get('href'))
-
-    # for link in soup.find_all('a'):
-    #   if '.jpg' in link.get('href') or '.png' in link.get('href'):
-    #       images.append(link.get('href'))
-
     image_urls = []
     for image in images:
-        if image[0] == '/': # If the image url is a relative link
-            image_url = url+image # Add the original url as a prefix
-        else:
-            image_url = image
+        image_url = 'http:' + image
         image_urls.append(str(image_url))
     return image_urls
 
@@ -81,6 +74,12 @@ def retrieve_image_urls_from_url(url=None, debug=False):
         image_urls.append(str(image_url))
     return image_urls
 
+def get_source_images(source_file=None, folder_name=None, class_name=None, bad_class_name=None):
+    '''
+    Given an html or text document, will gather image urls and dump the image files.    
+    '''
+    image_urls = retrieve_image_urls_from_source(source_file=source_file, class_name=class_name, bad_class_name=bad_class_name)
+    dump_image_files(url_list=image_urls, folder_name=folder_name)
 
 def get_gallery_images(gallery_urls=None, gallery_title=None):
     '''
@@ -123,11 +122,14 @@ def retrieve_gallery_urls(url=None, class_name=None, debug=False):
 
     return gallery_urls
 
+def get_images_from_list(url_list='data/url_list.json'):
+    pass
+
 def get_galleries_from_list(url_list='data/gallery_urls.json'):
     '''
     Retrieve images from a list of gallery urls.
     '''
-    pass
+    print json.dumps(url_list)
     # with open(url_list, 'r') as infile:
     #   for url in infile.readlines():
     #       page = 1 # For multiple pages
@@ -140,17 +142,19 @@ def get_galleries_from_list(url_list='data/gallery_urls.json'):
 
 
 
+# Get the images from a source file:
+# source_file = 'data/source.html'
+# title = 'suicide-girls'
+# class_name = 'unloaded' # The class we are searching for that contains images
+# bad_class_name = 'thumb-title' # The class of unwanted images (likely thumbnails)
+# get_source_images(source_file=source_file, folder_name=title, class_name=class_name, bad_class_name=bad_class_name)
 
 
-source_file = 'data/source.html'
-#title = 'suicide-girls'
-class_name = 'unloaded' # The class we are searching for that contains images
-bad_class_name = 'thumb-title' # The class of unwanted images (likely thumbnails)
-print retrieve_image_urls_from_source(source_file=source_file, class_name=class_name, bad_class_name=bad_class_name)
-
-
+# Get the images from a url list:
 #get_images_from_list()
 
+# Get the gallery images from a url list:
+get_galleries_from_list()
 
 # single_url = ''
 # retrieve_image_urls_from_url
