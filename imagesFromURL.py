@@ -25,8 +25,7 @@ def dump_image_files(url_list=None, folder_name=None, gallery_title=None):
 
 def retrieve_image_urls_from_source(source_file=None, class_name=None, debug=False):
     '''
-    Given an html file or text document, will dump all the images into a folder called
-    /images/<folder_name>/, where <folder_name> is specified as a parameter.
+    Given an html or text document, will find all image urls (png and jpg only) and return them.
     ''' 
     images = []
     html_file = ''
@@ -38,10 +37,15 @@ def retrieve_image_urls_from_source(source_file=None, class_name=None, debug=Fal
     if debug:
         print soup.prettify()
     pass
-    
+
     for link in soup.find_all('a'):
-        if '.jpg' in link.get('href') or '.png' in link.get('href'):
-            images.append(link.get('href'))
+        if link.get('class') is not None and class_name in link.get('class'):
+            if 'galleries' in link.get('href'):
+                galleries.append(link.get('href'))
+                    
+    # for link in soup.find_all('a'):
+    #   if '.jpg' in link.get('href') or '.png' in link.get('href'):
+    #       images.append(link.get('href'))
 
     image_urls = []
     for image in images:
@@ -53,6 +57,9 @@ def retrieve_image_urls_from_source(source_file=None, class_name=None, debug=Fal
     return image_urls
 
 def retrieve_image_urls_from_url(url=None, debug=False):
+    '''
+    Given a url, will find all image urls (png and jpg only) and return them.
+    '''
     images = []
     html_file = requests.get(url)
     soup = BeautifulSoup(html_file.content, 'html.parser')
@@ -89,6 +96,9 @@ def get_gallery_images(gallery_urls=None, gallery_title=None):
 
 
 def retrieve_gallery_urls(url=None, class_name=None, debug=False):
+    '''
+    Given a url, will find all gallery urls and return them.
+    '''
     galleries = []  
     html_file = requests.get(url)   
     soup = BeautifulSoup(html_file.content, 'html.parser')
