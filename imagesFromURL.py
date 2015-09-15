@@ -51,29 +51,6 @@ def retrieve_image_urls_from_source(source_file=None, class_name=None, bad_class
         image_urls.append(str(image_url))
     return image_urls
 
-def retrieve_image_urls_from_url(url=None, debug=False):
-    '''
-    Given a url, will find all image urls (png and jpg only) and return them.
-    '''
-    images = []
-    html_file = requests.get(url)
-    soup = BeautifulSoup(html_file.content, 'html.parser')
-    
-    if debug:
-        print soup.prettify()
-
-    for link in soup.find_all('a'):
-        if '.jpg' in link.get('href') or '.png' in link.get('href'):
-            images.append(link.get('href'))
-
-    image_urls = []
-    for image in images:
-        if image[0] == '/': # If the image url is a relative link
-            image_url = url+image # Add the original url as a prefix
-        else:
-            image_url = image
-        image_urls.append(str(image_url))
-    return image_urls
 
 def get_source_images(source_file=None, folder_name=None, class_name=None, bad_class_name=None):
     '''
@@ -86,12 +63,36 @@ def get_gallery_images(gallery_urls=None, gallery_title=None):
     '''
     Given a list of gallery urls, will gather image urls and dump the image files.
     '''
+    def retrieve_image_urls_from_url(url=None, debug=False):
+        '''
+        Given a url, will find all image urls (png and jpg only) and return them.
+        '''
+        images = []
+        html_file = requests.get(url)
+        soup = BeautifulSoup(html_file.content, 'html.parser')
+        
+        if debug:
+            print soup.prettify()
+
+        for link in soup.find_all('a'):
+            if '.jpg' in link.get('href') or '.png' in link.get('href'):
+                images.append(link.get('href'))
+
+        image_urls = []
+        for image in images:
+            if image[0] == '/': # If the image url is a relative link
+                image_url = url+image # Add the original url as a prefix
+            else:
+                image_url = image
+            image_urls.append(str(image_url))
+        return image_urls
+
     url_list = gallery_urls # File with list of urls
     for url in url_list:
         original_url = url.rstrip() # Strip that nasty \n
         title = original_url.split('/')[-1].rstrip() # Strip that nasty \n      
         print 'Gallery URL: ' + original_url
-        print 'Folder: ' + title
+        print 'Folder: ' + title + '\n'
         full_path = os.path.join('images', gallery_title, title)
         if os.path.exists(full_path):
             print 'Folder already exists, ignoring.\n'
@@ -131,6 +132,27 @@ def get_images_from_list(url_list='data/url_list.json'):
     '''
     Retrieve images from a list of individual urls.
     '''
+    def retrieve_image_urls_from_url(url=None, debug=False):
+        '''
+        Given a url, will find all image urls (png and jpg only) and return them.
+        '''
+        images = []
+        html_file = requests.get(url)
+        soup = BeautifulSoup(html_file.content, 'html.parser')
+        
+        if debug:
+            print soup.prettify()
+
+        for link in soup.find_all('a'):
+            if '.jpg' in link.get('href') or '.png' in link.get('href'):
+                images.append(link.get('href'))
+
+            image_urls = []
+            for image in images:
+                image_url = 'http:' + image
+                image_urls.append(str(image_url))
+            return image_urls
+
     with open(url_list) as infile:
         #pprint(json.load(infile))
         url_list = json.load(infile)
@@ -141,7 +163,9 @@ def get_images_from_list(url_list='data/url_list.json'):
                 print '-------------------------------------------------------------------------------------'
                 print 'Original URL: ' + original_url
                 print '-------------------------------------------------------------------------------------'
-                retrieve_image_urls_from_url(url=original_url)
+                image_urls = retrieve_image_urls_from_url(url=original_url)
+                print image_urls
+                dump_image_files(url_list=image_urls, folder_name=title)
 
 def get_galleries_from_list(url_list='data/gallery_urls.json'):
     '''
@@ -184,10 +208,7 @@ def get_galleries_from_list(url_list='data/gallery_urls.json'):
 
 
 # Get the images from a url list:
-#get_images_from_list()
+get_images_from_list()
 
 # Get the gallery images from a url list:
-get_galleries_from_list()
-
-# single_url = ''
-# retrieve_image_urls_from_url
+#get_galleries_from_list()
