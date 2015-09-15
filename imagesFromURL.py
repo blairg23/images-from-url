@@ -90,10 +90,9 @@ def get_gallery_images(gallery_urls=None, gallery_title=None):
     for url in url_list:
         original_url = url.rstrip() # Strip that nasty \n
         title = original_url.split('/')[-1].rstrip() # Strip that nasty \n      
-        print 'original_url ' + original_url
-        print title
+        print 'Gallery URL: ' + original_url
+        print 'Folder: ' + title
         full_path = os.path.join('images', gallery_title, title)
-        print full_path
         if os.path.exists(full_path):
             print 'Folder already exists, ignoring.\n'
         else:
@@ -129,7 +128,20 @@ def retrieve_gallery_urls(url=None, class_name=None, debug=False):
     return gallery_urls
 
 def get_images_from_list(url_list='data/url_list.json'):
-    pass
+    '''
+    Retrieve images from a list of individual urls.
+    '''
+    with open(url_list) as infile:
+        #pprint(json.load(infile))
+        url_list = json.load(infile)
+        for url in url_list['urls']:
+            original_url = url['url']
+            title = url['title']
+            if requests.get(original_url).status_code == 200: # If we're working with a real url
+                print '-------------------------------------------------------------------------------------'
+                print 'Original URL: ' + original_url
+                print '-------------------------------------------------------------------------------------'
+                retrieve_image_urls_from_url(url=original_url)
 
 def get_galleries_from_list(url_list='data/gallery_urls.json'):
     '''
@@ -140,12 +152,16 @@ def get_galleries_from_list(url_list='data/gallery_urls.json'):
         url_list = json.load(infile)
         for url in url_list['urls']:
             page = 1 # For multiple pages
-            original_url = url['url']
+            new_url = url['url']
             title = url['title']
-            while requests.get(original_url).status_code == 200: # As long as we're working with a real url
-                gallery_urls = retrieve_gallery_urls(url=original_url, class_name='track') # This class name signifies a gallery (in this case, 'track')
+            while requests.get(new_url).status_code == 200: # As long as we're working with a real url
+                print '-------------------------------------------------------------------------------------'
+                print 'Page URL: ' + new_url
+                print '-------------------------------------------------------------------------------------'
+                gallery_urls = retrieve_gallery_urls(url=new_url, class_name='track') # This class name signifies a gallery (in this case, 'track')
                 get_gallery_images(gallery_urls=gallery_urls, gallery_title=title)
-                original_url += '?page='+str(page)              
+                page += 1 # Increment the page number
+                new_url = url['url'] + '?page='+str(page) # Try the new page                
 
     # with open(url_list, 'r') as infile:
     #   for url in infile.readlines():
