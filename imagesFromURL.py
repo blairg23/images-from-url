@@ -4,7 +4,7 @@ import os
 from bs4 import BeautifulSoup
 
 def dump_image_files(url_list=None, folder_name=None):
-    for url in url_list:        
+    for url in url_list:
         response = requests.get(url, stream=True)
         if response.status_code == 200:
             image_name = url.split('/')[-1].rstrip()
@@ -37,18 +37,25 @@ def retrieve_image_urls(url=None, debug=False):
 
 def get_gallery_images(gallery_urls=None):
     url_list = gallery_urls # File with list of urls
-    with open(url_list, 'r') as infile:
-        for url in infile.readlines():
-            original_url = url.rstrip() # Strip that nasty \n
-            # numberOfPages = 1
-            title = original_url.split('/')[-1].rstrip() # Strip that nasty \n
-            print original_url
-            print title
-            image_urls = retrieve_image_urls(url=original_url)
-            dump_image_files(url_list=image_urls, folder_name=title)
+    for url in url_list:
+        original_url = url.rstrip() # Strip that nasty \n
+        title = original_url.split('/')[-1].rstrip() # Strip that nasty \n
+        print original_url
+        print title
+    #   image_urls = retrieve_image_urls(url=original_url)
+    #   dump_image_files(url_list=image_urls, folder_name=title)
+    # with open(url_list, 'r') as infile:
+    #   for url in infile.readlines():
+    #       original_url = url.rstrip() # Strip that nasty \n
+    #       # numberOfPages = 1
+    #       title = original_url.split('/')[-1].rstrip() # Strip that nasty \n
+    #       print original_url
+    #       print title
+    #       image_urls = retrieve_image_urls(url=original_url)
+    #       dump_image_files(url_list=image_urls, folder_name=title)
 
 
-def retrieve_gallery_urls(url=None, debug=False):
+def retrieve_gallery_urls(url=None, class_name=None, debug=False):
     gallery_urls = []
     html_file = requests.get(url)
     soup = BeautifulSoup(html_file.content, 'html.parser')
@@ -57,12 +64,14 @@ def retrieve_gallery_urls(url=None, debug=False):
         print soup.prettify()
 
     for link in soup.find_all('a'):
-        if 'galleries' in link.get('href'):
-            gallery_urls.append(link.get('href'))
+        if link.get('class') is not None and class_name in link.get('class'):
+            if 'galleries' in link.get('href'):
+                gallery_urls.append(link.get('href'))
+    return gallery_urls
 
-url_list = 'gallery_urls.txt'
+url_list = 'urls.txt'
 
 with open(url_list, 'r') as infile:
     for url in infile.readlines():
-        original_url = url.rstrip() # Strip that nasty \n               
-        galleries = retrieve_gallery_urls(url=original_url)
+        original_url = url.rstrip() # Strip that nasty \n       
+        galleries = retrieve_gallery_urls(url=original_url, class_name='track') # This class name signifies a gallery (in this case, 'track')
