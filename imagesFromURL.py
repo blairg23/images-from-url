@@ -189,22 +189,26 @@ def retrievePngs(url):
 
 
 def retrieveImages(url):
-	retrieveJpgs(url=url)
-	retrievePngs(url=url)
+    retrieveJpgs(url=url)
+    retrievePngs(url=url)
 
 
 #TODO: Replace these with sys.args:
-originalUrl = "http://imgur.com/a/fqSeC?gallery"
-numberOfPages = 1
-title = "burgers"
+url_list = 'urls.txt' # File with list of urls
+with open(url_list, 'r') as infile:
+    for url in infile.readlines():
+        originalUrl = url
+        # numberOfPages = 1
+        title = originalUrl.split('/')[-1].rstrip()
+        print originalUrl
+        print title
+        retrieveImages(originalUrl)
 
-retrieveImages(originalUrl)
-
-pageNum = 2        
-if numberOfPages > 1:
-    for i in range(0, numberOfPages):
-        updatedUrl = originalUrl + "page/" + str(pageNum)
-        print updatedUrl
-        retrieveImages(updatedUrl)        
-        pageNum += 1
+# pageNum = 2        
+# if numberOfPages > 1:
+#     for i in range(0, numberOfPages):
+#         updatedUrl = originalUrl + "page/" + str(pageNum)
+#         print updatedUrl
+#         retrieveImages(updatedUrl)        
+#         pageNum += 1
         
