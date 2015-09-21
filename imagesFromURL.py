@@ -136,6 +136,17 @@ def get_images_from_list(url_list='data/url_list.json'):
 		'''
 		Given a url, will find all image urls (png and jpg only) and return them.
 		'''
+		def check_links(link=None, images=[], parameter=None):
+			'''
+			Checks the given link for any jpgs or pngs and adds them to the given image list,
+			based on the given parameter (ie, for 'a' tag, the parameter='href')
+			'''
+			imagetype_list = ['.jpg', '.JPG', '.png', '.PNG']
+			for imagetype in imagetype_list:
+				if imagetype in link.get(parameter):
+					images.append(link.get(parameter))
+			return images
+
 		images = []
 		html_file = requests.get(url)
 		soup = BeautifulSoup(html_file.content, 'html.parser')
@@ -143,14 +154,19 @@ def get_images_from_list(url_list='data/url_list.json'):
 		if debug:
 			print soup.prettify()
 
-		for link in soup.find_all('a'):			
-			if '.jpg' in link.get('href') or '.png' in link.get('href'):
-				images.append(link.get('href'))
+		# Check 'a' tags for 'href' params leading to images:
+		for link in soup.find_all('a'):					
+			images = check_links(link=link, images=images, parameter='href')
 
-			image_urls = []
-			for image in images:
-				image_url = 'http:' + image
-				image_urls.append(str(image_url))
+		# Check 'img' tags for 'src' params leading to images:
+		for link in soup.find_all('img'):
+			check_links(link=link, images=images, parameter='src')
+
+		image_urls = []
+		for image in images:
+			image_url = 'http:' + image
+			image_urls.append(str(image_url))		
+			
 		return image_urls
 
 	with open(url_list) as infile:
