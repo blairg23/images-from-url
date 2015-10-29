@@ -1,0 +1,4 @@
+requests==2.8.1
+beautifulsoup==4.4.1
+pytumblr==0.0.6
+wget==3.2

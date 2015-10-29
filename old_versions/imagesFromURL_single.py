@@ -4,7 +4,7 @@ def removeValues(the_list, val):
     while val in the_list:
         the_list.remove(val)
 
-url = "http://imgur.com/a/1O9Ym"
+url = "http://bellus-puella.tumblr.com/"
 import urllib2
 from bs4 import BeautifulSoup
 page = BeautifulSoup(urllib2.urlopen(url))
