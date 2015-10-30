@@ -16,7 +16,7 @@ debug=False
 
 # Make the first request
 photo_urls = []
-blog_name = 'bellus-puella'
+blog_name = 'xxxsexxx'
 req = client.posts(blog_name, type="photo")
 number_of_posts = req['total_posts']
 
@@ -30,6 +30,7 @@ offset_number = 20
 number_of_pages = int(math.ceil(number_of_posts/offset_number*1.))
 print "Grabbing " + str(number_of_posts) + " photos from " + str(blog_name) + ".tumblr.com..."
 for i in range(number_of_pages+3):	
+#for i in range(1):
 	if debug:
 		print "Page=",i
 	req = client.posts(blog_name, type="photo", offset=i*offset_number) # to increment the offset by 20 every iteration	
@@ -44,7 +45,18 @@ for i in range(number_of_pages+3):
 print "Finished grabbing photos."
 if debug:
 	print len(photo_urls)
+
 print "Starting download."
+# If folder doesn't exist, create it:
+try:
+   	os.stat(blog_name)
+except:
+   	os.mkdir(blog_name)  
+
 for url in photo_urls:
-	wget.download(url, out='images'+os.sep) # Download each file
+	filename = blog_name+os.sep+url.split('/')[-1]
+	if not os.path.exists(filename):
+		wget.download(url, out=blog_name+os.sep) # Download each file
+	else:
+		print filename, " exists."
 print "Finished downloading photos."
