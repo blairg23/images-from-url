@@ -16,7 +16,7 @@ debug=False
 
 # Make the first request
 photo_urls = []
-blog_name = 'xxxsexxx'
+blog_name = 'elbuenjambico'
 req = client.posts(blog_name, type="photo")
 number_of_posts = req['total_posts']
 
