@@ -29,34 +29,33 @@ if debug:
 offset_number = 20
 number_of_pages = int(math.ceil(number_of_posts/offset_number*1.))
 print "Grabbing " + str(number_of_posts) + " photos from " + str(blog_name) + ".tumblr.com..."
+
+folder_name = os.path.join('images', blog_name)
+# If folder doesn't exist, create it:
+try:
+   	os.stat(folder_name)
+except:
+   	os.mkdir(folder_name)  
 for i in range(number_of_pages+3):	
 #for i in range(1):
 	if debug:
 		print "Page=",i
 	req = client.posts(blog_name, type="photo", offset=i*offset_number) # to increment the offset by 20 every iteration	
 	count=0
+	#print json.dumps(req, indent=4)
 	for post in req['posts']:			
 		count+=1
 		for photo in post['photos']:
 			#print json.dumps(photo['original_size']['url'], indent=4)	
-			photo_urls.append(photo['original_size']['url'])					
+			url = photo['original_size']['url']								
+			print 'Downloading {url}'.format(url=url)
+			filename = folder_name+os.sep+url.split('/')[-1]
+			if not os.path.exists(filename):
+				wget.download(url, out=folder_name+os.sep) # Download each file
+			else:
+				print filename, " exists."
 	if debug:
 		print "Added " + str(count) + " photos.\n"
-print "Finished grabbing photos."
-if debug:
-	print len(photo_urls)
-
-print "Starting download."
-# If folder doesn't exist, create it:
-try:
-   	os.stat(blog_name)
-except:
-   	os.mkdir(blog_name)  
-
-for url in photo_urls:
-	filename = blog_name+os.sep+url.split('/')[-1]
-	if not os.path.exists(filename):
-		wget.download(url, out=blog_name+os.sep) # Download each file
-	else:
-		print filename, " exists."
+	
+	
 print "Finished downloading photos."

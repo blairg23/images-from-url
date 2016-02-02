@@ -1,0 +1,1 @@
+This is a place to store images that are automatically put in place to say "this image no longer exists". Most notable for doing are tumblr, imgur, and youtube.
