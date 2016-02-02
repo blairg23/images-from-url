@@ -83,5 +83,5 @@ if __name__ == '__main__':
 	client = ImgurClient()
 	if client.authenticate():
 		gallery_id = 'Q6ZCl'
-		directory = os.path.join('images', gallery_id)
+		directory = os.path.join('images', 'imgur', gallery_id)
 		results = client.download_gallery(gallery=gallery_id, directory=directory, verbose=False)		

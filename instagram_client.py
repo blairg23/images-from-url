@@ -83,6 +83,7 @@ if __name__ == '__main__':
 	client = InstagramClient()
 	if client.authenticate():
 		screen_name = 'blair.gemmer'
+		directory = os.path.join('images', 'instagram', screen_name)
 
 		user_id = client.get_user_id(screen_name=screen_name)
 
@@ -91,4 +92,4 @@ if __name__ == '__main__':
 		if num_posts != None:
 			url_list = client.get_user_media(user_id=user_id, num_posts=num_posts)
 			#print json.dumps(url_list, indent=4)
-			client.download_media(url_list=url_list, directory='images')
+			client.download_media(url_list=url_list, directory=directory)

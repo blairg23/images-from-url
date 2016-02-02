@@ -30,7 +30,7 @@ offset_number = 20
 number_of_pages = int(math.ceil(number_of_posts/offset_number*1.))
 print "Grabbing " + str(number_of_posts) + " photos from " + str(blog_name) + ".tumblr.com..."
 
-folder_name = os.path.join('images', blog_name)
+folder_name = os.path.join('images', 'tumblr', blog_name)
 # If folder doesn't exist, create it:
 try:
    	os.stat(folder_name)
@@ -51,7 +51,7 @@ for i in range(number_of_pages+3):
 			print 'Downloading {url}'.format(url=url)
 			filename = folder_name+os.sep+url.split('/')[-1]
 			if not os.path.exists(filename):
-				wget.download(url, out=folder_name+os.sep) # Download each file
+				wget.download(url, out=folder_name) # Download each file
 			else:
 				print filename, " exists."
 	if debug:
