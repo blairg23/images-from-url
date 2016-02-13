@@ -52,7 +52,7 @@ class InstagramClient():
 		api_url = 'https://api.instagram.com/v1/users/{user_id}'.format(user_id=user_id)
 		payload = {
 					'client_id': self._client_id
-		}
+		}		
 		response = requests.get(api_url, params=payload)
 		if response.status_code == 200:
 			results = response.json()['data']
@@ -82,11 +82,11 @@ class InstagramClient():
 if __name__ == '__main__':
 	client = InstagramClient()
 	if client.authenticate():
-		screen_name = 'blair.gemmer'
+		screen_name = 'lowbrowpopsurrealists'
 		directory = os.path.join('images', 'instagram', screen_name)
 
 		user_id = client.get_user_id(screen_name=screen_name)
-
+		#print 'user_id', user_id
 		num_posts = client.get_num_posts(user_id=user_id)
 		print 'Posts:', num_posts
 		if num_posts != None:
