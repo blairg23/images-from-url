@@ -82,7 +82,7 @@ class InstagramClient():
 if __name__ == '__main__':
 	client = InstagramClient()
 	if client.authenticate():
-		screen_name = 'lowbrowpopsurrealists'
+		screen_name = 'blair.gemmer'
 		directory = os.path.join('images', 'instagram', screen_name)
 
 		user_id = client.get_user_id(screen_name=screen_name)
