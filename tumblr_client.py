@@ -16,7 +16,7 @@ debug=False
 
 # Make the first request
 photo_urls = []
-blog_name = 'elbuenjambico'
+blog_name = 'blairgemmer'
 req = client.posts(blog_name, type="photo")
 number_of_posts = req['total_posts']
 
@@ -30,12 +30,14 @@ offset_number = 20
 number_of_pages = int(math.ceil(number_of_posts/offset_number*1.))
 print "Grabbing " + str(number_of_posts) + " photos from " + str(blog_name) + ".tumblr.com..."
 
-folder_name = os.path.join('images', 'tumblr', blog_name)
+directory = os.path.join('images', 'tumblr', blog_name)
 # If folder doesn't exist, create it:
 try:
-   	os.stat(folder_name)
+   	os.stat(directory)
 except:
-   	os.mkdir(folder_name)  
+   	os.mkdir(directory)  
+contents = os.path.join(directory,'contents.txt')
+
 for i in range(number_of_pages+3):	
 #for i in range(1):
 	if debug:
@@ -49,9 +51,15 @@ for i in range(number_of_pages+3):
 			#print json.dumps(photo['original_size']['url'], indent=4)	
 			url = photo['original_size']['url']								
 			print 'Downloading {url}'.format(url=url)
-			filename = folder_name+os.sep+url.split('/')[-1]
-			if not os.path.exists(filename):
-				wget.download(url, out=folder_name) # Download each file
+			if os.path.exists(contents):
+			with open(contents, 'r') as infile:
+				lines = infile.readlines()
+				for line in lines:
+					image_list.append(line.rstrip('\n'))
+			if url not in image_list:
+				with open(contents, 'a+') as outfile:
+					outfile.write(url+'\n')
+				wget.download(url, out=directory) # Download each file
 			else:
 				print filename, " exists."
 	if debug:
