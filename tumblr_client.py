@@ -52,10 +52,10 @@ for i in range(number_of_pages+3):
 			url = photo['original_size']['url']								
 			print 'Downloading {url}'.format(url=url)
 			if os.path.exists(contents):
-			with open(contents, 'r') as infile:
-				lines = infile.readlines()
-				for line in lines:
-					image_list.append(line.rstrip('\n'))
+				with open(contents, 'r') as infile:
+					lines = infile.readlines()
+					for line in lines:
+						image_list.append(line.rstrip('\n'))
 			if url not in image_list:
 				with open(contents, 'a+') as outfile:
 					outfile.write(url+'\n')
