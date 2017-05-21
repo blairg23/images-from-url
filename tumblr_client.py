@@ -35,8 +35,10 @@ directory = os.path.join('images', 'tumblr', blog_name)
 try:
    	os.stat(directory)
 except:
-   	os.mkdir(directory)  
+   	os.mkdir(directory)
 contents = os.path.join(directory,'contents.txt')
+image_list = []
+image_counter = 0
 
 for i in range(number_of_pages+3):	
 #for i in range(1):
