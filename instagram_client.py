@@ -2,13 +2,15 @@ import requests, json, wget, os
 
 class InstagramClient():
 
-	_client_id = 'a7154461155f4c5f985e66c94093046c'
+	_client_id = 'd16d1d5fdc56444c81de7003165fc5d0'
+	_client_secret = '560ed2f503de47108a90830c83cb0ac3'
+	_access_token = '1996233249.d16d1d5.1f374bb9c52942d2a89c5641433dec99'
 	_api_url = 'https://api.instagram.com/v1/'
 
 	def authenticate(self):
 		return True
 
-	def get_user_id(self, screen_name=None):		
+	def get_user_id(self, screen_name=None):
 		payload = {
 					'q': screen_name,
 					'client_id': self._client_id
@@ -77,7 +79,7 @@ class InstagramClient():
 					outfile.write(url+'\n')
 				wget.download(url,directory)
 				image_counter += 1
-		print '{num_images} Images Downloaded.'.format(num_images=image_counter)
+		print('{num_images} Images Downloaded.'.format(num_images=image_counter))
 
 if __name__ == '__main__':
 	client = InstagramClient()
@@ -88,7 +90,7 @@ if __name__ == '__main__':
 		user_id = client.get_user_id(screen_name=screen_name)
 		#print 'user_id', user_id
 		num_posts = client.get_num_posts(user_id=user_id)
-		print 'Posts:', num_posts
+		print('Posts:', num_posts)
 		if num_posts != None:
 			url_list = client.get_user_media(user_id=user_id, num_posts=num_posts)
 			#print json.dumps(url_list, indent=4)

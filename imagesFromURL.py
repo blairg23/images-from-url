@@ -25,7 +25,7 @@ def dump_image_files(url_list=None, folder_name=None, gallery_title=None):
 				with open(full_path, 'wb') as out_file: # Then write to it              
 					out_file.write(response.content)
 			else:
-				print image_name + ' already exists, ignoring.'
+				print(image_name + ' already exists, ignoring.')
 
 def retrieve_image_urls_from_source(source_file=None, class_name=None, bad_class_name=None, debug=False):
 	'''
@@ -39,7 +39,7 @@ def retrieve_image_urls_from_source(source_file=None, class_name=None, bad_class
 	soup = BeautifulSoup(html_file, 'html.parser')
 
 	if debug:
-		print soup.prettify()
+		print(soup.prettify())
 	pass
 	for link in soup.find_all('img'):
 		if link.get('class') is not None and bad_class_name not in link.get('class') and class_name in link.get('class'):
@@ -72,7 +72,7 @@ def get_gallery_images(gallery_urls=None, gallery_title=None):
 		soup = BeautifulSoup(html_file.content, 'html.parser')
 		
 		if debug:
-			print soup.prettify()
+			print(soup.prettify())
 
 		for link in soup.find_all('a'):
 			if '.jpg' in link.get('href') or '.png' in link.get('href'):
@@ -91,11 +91,11 @@ def get_gallery_images(gallery_urls=None, gallery_title=None):
 	for url in url_list:
 		original_url = url.rstrip() # Strip that nasty \n
 		title = original_url.split('/')[-1].rstrip() # Strip that nasty \n      
-		print 'Gallery URL: ' + original_url
-		print 'Folder: ' + title + '\n'
+		print('Gallery URL: ' + original_url)
+		print('Folder: ' + title + '\n')
 		full_path = os.path.join('images', gallery_title, title)
 		if os.path.exists(full_path):
-			print 'Folder already exists, ignoring.\n'
+			print('Folder already exists, ignoring.\n')
 		else:
 			image_urls = retrieve_image_urls_from_url(url=original_url)
 			dump_image_files(url_list=image_urls, folder_name=title, gallery_title=gallery_title)
@@ -110,7 +110,7 @@ def retrieve_gallery_urls(url=None, class_name=None, debug=False):
 	soup = BeautifulSoup(html_file.content, 'html.parser')
 
 	if debug:
-		print soup.prettify()
+		print(soup.prettify())
 
 	for link in soup.find_all('a'):
 		if link.get('class') is not None and class_name in link.get('class'):
@@ -152,7 +152,7 @@ def get_images_from_list(url_list='data/url_list.json'):
 		soup = BeautifulSoup(html_file.content, 'html.parser')
 
 		if debug:
-			print soup.prettify()
+			print(soup.prettify())
 
 		# Check 'a' tags for 'href' params leading to images:
 		for link in soup.find_all('a'):					
@@ -176,11 +176,11 @@ def get_images_from_list(url_list='data/url_list.json'):
 			original_url = url['url']
 			title = url['title']
 			if requests.get(original_url).status_code == 200: # If we're working with a real url
-				print '-------------------------------------------------------------------------------------'
-				print 'Original URL: ' + original_url
-				print '-------------------------------------------------------------------------------------'
+				print('-------------------------------------------------------------------------------------')
+				print('Original URL: ' + original_url)
+				print('-------------------------------------------------------------------------------------')
 				image_urls = retrieve_image_urls_from_url(url=original_url)
-				print image_urls
+				print(image_urls)
 				dump_image_files(url_list=image_urls, folder_name=title)
 
 def get_galleries_from_list(url_list='data/gallery_urls.json'):
@@ -195,9 +195,9 @@ def get_galleries_from_list(url_list='data/gallery_urls.json'):
 			new_url = url['url']
 			title = url['title']
 			while requests.get(new_url).status_code == 200: # As long as we're working with a real url
-				print '-------------------------------------------------------------------------------------'
-				print 'Page URL: ' + new_url
-				print '-------------------------------------------------------------------------------------'
+				print('-------------------------------------------------------------------------------------')
+				print('Page URL: ' + new_url)
+				print('-------------------------------------------------------------------------------------')
 				gallery_urls = retrieve_gallery_urls(url=new_url, class_name='track') # This class name signifies a gallery (in this case, 'track')
 				get_gallery_images(gallery_urls=gallery_urls, gallery_title=title)
 				page += 1 # Increment the page number
