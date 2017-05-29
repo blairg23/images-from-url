@@ -16,8 +16,8 @@ def get_image_urls_from_html(html=None, src_tag=None):
         #print(image.get(src_tag))
 
 if __name__ == '__main__':
-    url = 'http://www.sylphsia.com/nude-folio/'
-    url_name = 'sylphsia'
+    url = 'http://na.finalfantasyxiv.com/'
+    url_name = 'ffxiv'
     output_directory = os.path.join('images', 'websites', url_name)
 
     # If the output folder doesn't exist, create it:
@@ -30,7 +30,7 @@ if __name__ == '__main__':
 
     html = response.content.decode('utf-8')
 
-    src_tag = 'data-src'
+    src_tag = 'src'
 
     image_urls = get_image_urls_from_html(html=html, src_tag=src_tag)
 
