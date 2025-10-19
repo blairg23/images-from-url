@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+# Explicit examples if you need them
+*.sh    text eol=lf
+*.py    text eol=lf
+*.bat   text eol=crlf
+

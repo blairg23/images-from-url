@@ -23,7 +23,7 @@ data_directory = 'data'
 data_file = 'tumblr_user_list.json'
 # Make the first request
 photo_urls = []
-blog_names = ['blair.gemmer']
+blog_names = ['soranamae']
 for blog_name in blog_names:
 	req = client.posts(blog_name, type='photo')
 	number_of_posts = req['total_posts']

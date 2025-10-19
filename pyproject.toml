@@ -1,0 +1,31 @@
+[project]
+name = "images-from-url"
+version = "0.1.0"
+description = "A simple high-resolution image scraper for paginated galleries."
+authors = [
+  { name = "Blair Gemmer", email = "blairg23@gmail.com" }
+]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.9"
+
+dependencies = [
+  "requests>=2.31.0",
+  "beautifulsoup4>=4.12.0",
+  "lxml>=4.9.0",
+  "playwright (>=1.55.0,<2.0.0)"
+]
+
+[project.scripts]
+hires-scraper = "hires_scraper:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.isort]
+profile = "black"
