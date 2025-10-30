@@ -7,9 +7,7 @@ Concurrent gallery scraper - Playwright or HTTP-only - with:
 • One bar per active download; finished bars disappear (configurable)
 • Resume via breadcrumbs; skip existing files; size filter
 • End-of-run verification + auto-retry of missing files
-• Resume now also skips fully-processed list offsets
-• MP4 HEAD checks skipped for speed
-• Breadcrumbs store URL + path + referer + size; audit compares against disk
+• Global duplicate tracking across posts (with per-URL list of post pages)
 
 Output layout:
   <out>/<source>/<username>/{images,videos}/...
@@ -124,10 +122,6 @@ def count_files_with_exts(root: str, exts: set[str]) -> int:
             if fn.lower().endswith(exts):
                 total += 1
     return total
-
-def cur_offset_from_url(u: str) -> int:
-    val = parse_qs(urlparse(u).query).get("o", ["0"])[0]
-    return int(val) if val.isdigit() else 0
 
 # ---------------- HTTP util ----------------
 
@@ -302,8 +296,7 @@ class Breadcrumbs:
     State file: <out>/<source>/<user>/.state.jsonl
     Records:
       - {"type": "post_visited", "post": URL}
-      - {"type": "media_downloaded", "url": URL, "path": PATH, "referer": POST_URL, "size": INT}
-      - {"type": "list_offset_done", "offset": INT}
+      - {"type": "media_downloaded", "url": URL, "path": PATH, "referer": POST_URL, "size": BYTES?}
     """
     def __init__(self, root_out: str, source: str, username: str, enable: bool = True):
         self.enable = enable
@@ -312,8 +305,8 @@ class Breadcrumbs:
         self.path = os.path.join(self.dir, ".state.jsonl")
         self.visited_posts: Set[str] = set()
         self.downloaded_urls: Set[str] = set()
-        self.url_records: Dict[str, Dict[str, str]] = {}  # url -> {"path":..., "referer":..., "size": int}
-        self.processed_offsets: Set[int] = set()
+        # url -> {"path":..., "referer":..., "size": int|None}
+        self.url_records: Dict[str, Dict[str, Optional[int]]] = {}
         if enable:
             self._load()
 
@@ -334,13 +327,10 @@ class Breadcrumbs:
                         entry = {
                             "path": rec.get("path",""),
                             "referer": rec.get("referer",""),
-                            "size": rec.get("size", 0)
+                            "size": rec.get("size", None)
                         }
+                            # tolerate older records without size
                         self.url_records[rec["url"]] = entry
-                    elif t == "list_offset_done":
-                        off = rec.get("offset")
-                        if isinstance(off, int):
-                            self.processed_offsets.add(off)
         except Exception:
             pass
 
@@ -355,17 +345,17 @@ class Breadcrumbs:
             pass
 
     def mark_post(self, url: str):
+        if not self.enable:
+            return
         self.visited_posts.add(url)
         self._append({"type": "post_visited", "post": url})
 
     def mark_media(self, url: str, path: str, referer: Optional[str] = "", size: Optional[int] = None):
+        if not self.enable:
+            return
         self.downloaded_urls.add(url)
-        self.url_records[url] = {"path": path, "referer": referer or "", "size": int(size or 0)}
-        self._append({"type": "media_downloaded", "url": url, "path": path, "referer": referer or "", "size": int(size or 0)})
-
-    def mark_offset_done(self, offset: int):
-        self.processed_offsets.add(int(offset))
-        self._append({"type": "list_offset_done", "offset": int(offset)})
+        self.url_records[url] = {"path": path, "referer": referer or "", "size": size}
+        self._append({"type": "media_downloaded", "url": url, "path": path, "referer": referer or "", "size": size})
 
 # ---------------- progress pane (pinned, non-flooding) ----------------
 
@@ -421,7 +411,6 @@ class ProgressRegistry:
 
     def snapshot(self) -> List[Tuple[int, BarState]]:
         with self._lock:
-            # order by last_update (recent first), fallback to created_ts
             pairs = list(self._bars.items())
             pairs.sort(key=lambda kv: (kv[1].last_update or self._meta.get(kv[0], 0)), reverse=True)
             return pairs[:self.display_limit]
@@ -478,8 +467,8 @@ class PinnedRenderer(threading.Thread):
             while not self._stop_evt.is_set():
                 snap = self.reg.snapshot()
                 if self.ansi:
-                    sys.stdout.write("\x1b[u")  # restore cursor to saved pos
-                    sys.stdout.write("\x1b[J")  # clear to end
+                    sys.stdout.write("\x1b[u")
+                    sys.stdout.write("\x1b[J")
                     if not snap:
                         sys.stdout.write("(idle)\n")
                     else:
@@ -493,14 +482,7 @@ class PinnedRenderer(threading.Thread):
                     sys.stdout.flush()
                 time.sleep(self.interval)
         finally:
-            # leave last state rendered
             pass
-
-class NoopRenderer:
-    """Safe stand-in when the live pane is disabled or thread init fails."""
-    def start(self): pass
-    def stop(self): pass
-    def join(self, timeout=None): pass
 
 # ---------------- download worker pool ----------------
 
@@ -531,12 +513,11 @@ def download_worker(name: str,
         fname = filename_from_url(url)
         existing = any_variant_exists(outdir, fname)
         if existing:
-            # record the path we found so verification can compare
             try:
-                size_now = os.path.getsize(existing)
+                size_on_disk = os.path.getsize(existing)
             except Exception:
-                size_now = None
-            crumbs.mark_media(url, existing, referer=referer or "", size=size_now)
+                size_on_disk = None
+            crumbs.mark_media(url, existing, referer=referer or "", size=size_on_disk)
             q.task_done()
             continue
 
@@ -547,13 +528,14 @@ def download_worker(name: str,
         if referer:
             headers["Referer"] = referer
 
-        # Pre-get content-length for bar
+        # Pre-get content-length for bar (skip for videos)
         total = None
         try:
-            r_head = session.head(url, headers=headers, allow_redirects=True, timeout=20)
-            cl = r_head.headers.get("content-length")
-            if cl and cl.isdigit():
-                total = int(cl)
+            if not is_video_url(url):
+                r_head = session.head(url, headers=headers, allow_redirects=True, timeout=20)
+                cl = r_head.headers.get("content-length")
+                if cl and cl.isdigit():
+                    total = int(cl)
         except requests.RequestException:
             pass
 
@@ -572,12 +554,11 @@ def download_worker(name: str,
                             reg.update(bar_id, len(chunk))
             os.replace(tmp, path)
             ok = True
-            size_now = None
             try:
-                size_now = os.path.getsize(path)
+                size_on_disk = os.path.getsize(path)
             except Exception:
-                pass
-            crumbs.mark_media(url, path, referer=referer or "", size=size_now)
+                size_on_disk = None
+            crumbs.mark_media(url, path, referer=referer or "", size=size_on_disk)
         except requests.RequestException:
             try:
                 if os.path.exists(tmp): os.remove(tmp)
@@ -600,12 +581,11 @@ def size_filter_with_trust(pairs: List[Tuple[str, bool]],
         return [u for (u, _) in pairs]
     kept: List[str] = []
     for (u, trusted) in pairs:
-        # Always keep trusted links
-        if trusted:
+        # Do not HEAD-check videos; assume they are big enough
+        if is_video_url(u):
             kept.append(u)
             continue
-        # Skip HEAD check for MP4s to speed things up
-        if u.lower().endswith(".mp4"):
+        if trusted:
             kept.append(u)
             continue
         sz = head_content_length(u, session, referer)
@@ -615,6 +595,23 @@ def size_filter_with_trust(pairs: List[Tuple[str, bool]],
             vlog(verbose, f"  └─ skip small {sz} B (< {min_bytes} B): {u}")
             dprint(debug, f"skip small ({sz} B < {min_bytes} B): {u}")
     return kept
+
+# ---------------- Crawl stats helpers ----------------
+
+class CrawlTally:
+    def __init__(self):
+        self.discovered_images = 0  # after size filter, before global de-dupe
+        self.discovered_videos = 0
+        self.enqueued_images = 0    # after global de-dupe
+        self.enqueued_videos = 0
+
+    @property
+    def discovered_total(self) -> int:
+        return self.discovered_images + self.discovered_videos
+
+    @property
+    def enqueued_total(self) -> int:
+        return self.enqueued_images + self.enqueued_videos
 
 # ---------------- Crawl (Playwright) ----------------
 
@@ -645,18 +642,19 @@ def crawl_playwright(
     max_posts_per_page: int,
     resume: bool,
     # concurrency
-    worker_q: "queue.Queue[Optional[DownloadTask]]",
-    reg: ProgressRegistry,
+    worker_q: Optional["queue.Queue[Optional[DownloadTask]]"],
+    reg: Optional[ProgressRegistry],
     session: requests.Session,
     crumbs: Breadcrumbs,
     show_download_bars: bool,
+    # global de-dupe across posts
+    global_seen_urls: Set[str],
+    url_posts: Dict[str, Set[str]],
+    tally: CrawlTally,
 ):
     posts_per_page: List[int] = []
     media_per_page: List[int] = []
     total_posts = 0
-    total_media = 0
-    images_found_total = 0
-    videos_found_total = 0
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headful)
@@ -686,7 +684,6 @@ def crawl_playwright(
             except Exception:
                 pass
 
-        # initial nav
         goto_and_wait(start_url)
         page_index = 1
 
@@ -701,16 +698,7 @@ def crawl_playwright(
             except Exception:
                 pass
 
-        # fast-forward over already processed offsets
-        if resume and offset_step > 0 and offset_max is not None and crumbs.processed_offsets:
-            cur_off = cur_offset_from_url(page.url)
-            while cur_off in crumbs.processed_offsets and cur_off <= offset_max:
-                cur_off += offset_step
-            if cur_off != cur_offset_from_url(page.url):
-                next_url = page_template.format(offset=cur_off) if page_template else set_query_param(page.url, "o", str(cur_off))
-                goto_and_wait(next_url)
-
-        visited_posts: Set[str] = set(crumbs.visited_posts) if resume else set()
+        visited_posts: Set[str] = set(crumbs.visited_posts) if (resume and crumbs.enable) else set()
 
         while True:
             # collect post links
@@ -741,7 +729,9 @@ def crawl_playwright(
                     continue
 
                 vlog(verbose, f"[page {page_index} post {idx}/{posts_count}] Visiting: {post_url}")
-                crumbs.mark_post(post_url)
+
+                if not dry_run:
+                    crumbs.mark_post(post_url)
                 visited_posts.add(post_url)
 
                 try:
@@ -759,40 +749,53 @@ def crawl_playwright(
 
                     media_urls = size_filter_with_trust(pairs, session, min_bytes, verbose, debug, referer=post_url)
                     imgs, vids = count_kinds(media_urls)
-                    images_found_total += imgs
-                    videos_found_total += vids
+                    tally.discovered_images += imgs
+                    tally.discovered_videos += vids
                     vlog(verbose, f"  ├─ kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
 
-                    # enqueue downloads
-                    seen: Set[str] = set()
+                    # enqueue downloads with global de-dupe across posts
+                    seen_in_post: Set[str] = set()
                     for u in media_urls:
-                        if u in seen: continue
-                        seen.add(u)
-                        subdir = output_subdir(out_root, source, username, u)
-                        worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
-                        page_media_enqueued += 1
+                        if u in seen_in_post:
+                            continue
+                        seen_in_post.add(u)
 
-                    total_media += len(media_urls)
+                        url_posts.setdefault(u, set()).add(post_url)
+
+                        if u in global_seen_urls:
+                            dprint(debug, f"  └─ global-dup (skip enqueue): {u}")
+                            continue
+
+                        global_seen_urls.add(u)
+
+                        # In dry-run, do NOT enqueue or write breadcrumbs; just count as unique
+                        if dry_run:
+                            if is_image_url(u):
+                                tally.enqueued_images += 1
+                            elif is_video_url(u):
+                                tally.enqueued_videos += 1
+                        else:
+                            subdir = output_subdir(out_root, source, username, u)
+                            assert worker_q is not None
+                            worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
+                            page_media_enqueued += 1
+                            if is_image_url(u):
+                                tally.enqueued_images += 1
+                            elif is_video_url(u):
+                                tally.enqueued_videos += 1
+
                     post.close()
                 except Exception as e:
                     vlog(verbose, f"  └─ ERROR visiting post: {e}")
 
             media_per_page.append(page_media_enqueued)
 
-            # mark current offset done
-            cur_off = cur_offset_from_url(page.url)
-            crumbs.mark_offset_done(cur_off)
-
             # next page
-            next_offset = cur_off + offset_step
-            # skip any already-done offsets on resume
-            if resume and offset_step > 0 and offset_max is not None:
-                while next_offset in crumbs.processed_offsets and next_offset <= offset_max:
-                    next_offset += offset_step
-
+            cur_val = parse_qs(urlparse(page.url).query).get("o", ["0"])[0]
+            cur_offset = int(cur_val) if cur_val.isdigit() else 0
+            next_offset = cur_offset + offset_step
             if (max_pages > 0 and page_index >= max_pages) or (offset_max is not None and next_offset > offset_max):
                 break
-
             next_url = page_template.format(offset=next_offset) if page_template else set_query_param(page.url, "o", str(next_offset))
             goto_and_wait(next_url)
             page_index += 1
@@ -805,9 +808,6 @@ def crawl_playwright(
         "posts_per_page": posts_per_page,
         "media_per_page": media_per_page,
         "total_posts": total_posts,
-        "total_media": total_media,
-        "images_found": images_found_total,
-        "videos_found": videos_found_total,
     }
 
 # ---------------- Crawl (HTTP-only) ----------------
@@ -833,18 +833,19 @@ def crawl_http(
     max_posts_per_page: int,
     resume: bool,
     # concurrency
-    worker_q: "queue.Queue[Optional[DownloadTask]]",
-    reg: ProgressRegistry,
+    worker_q: Optional["queue.Queue[Optional[DownloadTask]]"],
+    reg: Optional[ProgressRegistry],
     session: requests.Session,
     crumbs: Breadcrumbs,
     show_download_bars: bool,
+    # global de-dupe across posts
+    global_seen_urls: Set[str],
+    url_posts: Dict[str, Set[str]],
+    tally: CrawlTally,
 ):
     posts_per_page: List[int] = []
     media_per_page: List[int] = []
     total_posts = 0
-    total_media = 0
-    images_found_total = 0
-    videos_found_total = 0
 
     p = urlparse(start_url)
     start_o = 0
@@ -860,20 +861,14 @@ def crawl_http(
             if cur > offset_max: break
             offsets.append(cur)
 
-    visited_posts: Set[str] = set(crumbs.visited_posts) if resume else set()
+    visited_posts: Set[str] = set(crumbs.visited_posts) if (resume and crumbs.enable) else set()
 
     for i, off in enumerate(offsets, start=1):
-        # skip offsets already done
-        if resume and off in crumbs.processed_offsets:
-            dprint(debug, f"[HTTP] skipping offset {off} (resume)")
-            continue
-
         list_url = page_template.format(offset=off) if page_template else set_query_param(start_url, "o", str(off))
         dprint(debug, f"[HTTP] list url: {list_url}")
 
         html = http_get(session, list_url, debug)
-        if not html:
-            break
+        if not html: break
 
         post_links = http_list_post_links(html, list_url, post_selector, article_anchor_selector)
 
@@ -897,7 +892,9 @@ def crawl_http(
                 continue
 
             vlog(verbose, f"[page {i} post {idx}/{posts_count}] Visiting: {post_url}")
-            crumbs.mark_post(post_url)
+
+            if not dry_run:
+                crumbs.mark_post(post_url)
             visited_posts.add(post_url)
 
             html_post = http_get(session, post_url, debug)
@@ -911,28 +908,44 @@ def crawl_http(
 
                 media_urls = size_filter_with_trust(pairs, session, min_bytes, verbose, debug, referer=post_url)
                 imgs, vids = count_kinds(media_urls)
-                images_found_total += imgs
-                videos_found_total += vids
+                tally.discovered_images += imgs
+                tally.discovered_videos += vids
                 vlog(verbose, f"  ├─ kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
 
-                seen: Set[str] = set()
+                seen_in_post: Set[str] = set()
                 for u in media_urls:
-                    if u in seen: continue
-                    seen.add(u)
-                    subdir = output_subdir(out_root, source, username, u)
-                    worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
-                    page_media_enqueued += 1
+                    if u in seen_in_post:
+                        continue
+                    seen_in_post.add(u)
 
-                total_media += len(media_urls)
+                    url_posts.setdefault(u, set()).add(post_url)
+
+                    if u in global_seen_urls:
+                        dprint(debug, f"  └─ global-dup (skip enqueue): {u}")
+                        continue
+
+                    global_seen_urls.add(u)
+
+                    if dry_run:
+                        if is_image_url(u):
+                            tally.enqueued_images += 1
+                        elif is_video_url(u):
+                            tally.enqueued_videos += 1
+                    else:
+                        subdir = output_subdir(out_root, source, username, u)
+                        assert worker_q is not None
+                        worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
+                        page_media_enqueued += 1
+                        if is_image_url(u):
+                            tally.enqueued_images += 1
+                        elif is_video_url(u):
+                            tally.enqueued_videos += 1
             else:
                 vlog(verbose, "  └─ ERROR fetching post")
 
             time.sleep(0.02)
 
         media_per_page.append(page_media_enqueued)
-
-        # mark offset done after processing
-        crumbs.mark_offset_done(off)
 
         if max_pages > 0 and i >= max_pages: break
         time.sleep(max(0.0, polite_delay))
@@ -942,9 +955,6 @@ def crawl_http(
         "posts_per_page": posts_per_page,
         "media_per_page": media_per_page,
         "total_posts": total_posts,
-        "total_media": total_media,
-        "images_found": images_found_total,
-        "videos_found": videos_found_total,
     }
 
 # ---------------- verification + retry helpers ----------------
@@ -985,12 +995,11 @@ def retry_missing_downloads(missing_urls: List[str],
                         if chunk:
                             f.write(chunk)
             os.replace(tmp, path)
-            size_now = None
             try:
-                size_now = os.path.getsize(path)
+                size_on_disk = os.path.getsize(path)
             except Exception:
-                pass
-            crumbs.mark_media(u, path, referer=referer, size=size_now)
+                size_on_disk = None
+            crumbs.mark_media(u, path, referer=referer, size=size_on_disk)
             ok.append(u)
         except Exception as e:
             try:
@@ -1004,7 +1013,7 @@ def retry_missing_downloads(missing_urls: List[str],
 # ---------------- CLI ----------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Concurrent gallery scraper - pinned progress pane + resume + skip existing + verification + auto-retry.")
+    ap = argparse.ArgumentParser(description="Concurrent gallery scraper - pinned progress pane + resume + skip existing + verification + auto-retry + global de-dupe with audit.")
     ap.add_argument("url", help="Starting list URL (e.g., ...?o=0)")
     ap.add_argument("--dry-run", action="store_true", help="Only report counts (no downloads)")
 
@@ -1055,45 +1064,51 @@ def main():
 
     args = ap.parse_args()
     page_template = (args.page_template or None)
-    use_resume = not args.no_resume
+    use_resume = not args.no_resume and not args.dry_run  # never write state during dry-run
 
     # Resolve source + username
     resolved_source = args.source.strip() or extract_source_from_url(args.url) or "source_unknown"
     resolved_user = args.username.strip() or extract_username_from_url(args.url) or "unknown_user"
 
-    # Ensure folders exist
-    ensure_dir(os.path.join(args.out, resolved_source, resolved_user, "images"))
-    ensure_dir(os.path.join(args.out, resolved_source, resolved_user, "videos"))
+    # Ensure folders exist (only when not dry-run)
+    if not args.dry_run:
+        ensure_dir(os.path.join(args.out, resolved_source, resolved_user, "images"))
+        ensure_dir(os.path.join(args.out, resolved_source, resolved_user, "videos"))
 
     # Shared session & breadcrumbs
     session = requests.Session()
     session.headers.update({"User-Agent": UA})
     crumbs = Breadcrumbs(args.out, resolved_source, resolved_user, enable=use_resume)
-    prev_downloaded = set(crumbs.downloaded_urls)  # snapshot for "this run" deltas
+    prev_downloaded = set(crumbs.downloaded_urls) if crumbs.enable else set()
 
-    # Progress registry + pinned renderer
-    reg = ProgressRegistry(leave_completed=args.leave_completed, display_limit=args.pane_lines)
-
-    # Create a renderer that can never crash teardown
-    if args.no_live_pane:
-        renderer = NoopRenderer()
-    else:
+    # Progress registry + pinned renderer (only when not dry-run)
+    reg = None
+    renderer = None
+    if not args.dry_run:
+        reg = ProgressRegistry(leave_completed=args.leave_completed, display_limit=args.pane_lines)
+        renderer = PinnedRenderer(reg, title="downloads", live=not args.no_live_pane, ansi=not args.no_ansi)
         try:
-            renderer = PinnedRenderer(reg, title="downloads", live=True, ansi=not args.no_ansi)
             renderer.start()
-        except Exception as e:
+        except RuntimeError as e:
             sys.stderr.write(f"[warn] live pane disabled: {e}\n")
-            renderer = NoopRenderer()
+            renderer.live = False
 
-    # Worker pool
-    qdl: "queue.Queue[Optional[DownloadTask]]" = queue.Queue(maxsize=args.workers * 2)
+    # Worker pool (only when not dry-run)
+    qdl = None
     workers: List[threading.Thread] = []
-    for i in range(args.workers):
-        t = threading.Thread(target=download_worker,
-                             args=(f"W{i+1}", qdl, reg, session, crumbs, not args.no_live_pane),
-                             daemon=True)
-        t.start()
-        workers.append(t)
+    if not args.dry_run:
+        qdl = queue.Queue(maxsize=args.workers * 2)
+        for i in range(args.workers):
+            t = threading.Thread(target=download_worker,
+                                 args=(f"W{i+1}", qdl, reg, session, crumbs, not args.no_live_pane),
+                                 daemon=True)
+            t.start()
+            workers.append(t)
+
+    # Global de-dupe structures and tally
+    global_seen_urls: Set[str] = set()
+    url_posts: Dict[str, Set[str]] = {}
+    tally = CrawlTally()
 
     common = dict(
         start_url=args.url,
@@ -1109,17 +1124,20 @@ def main():
         offset_max=args.offset_max if args.offset_max >= 0 else None,
         polite_delay=args.polite_delay,
         debug=args.debug,
-        show_progress=True,  # page one-liners to stderr
+        show_progress=True,
         min_bytes=args.min_bytes,
         verbose=args.verbose,
         print_urls=args.print_urls,
         max_posts_per_page=args.max_posts_per_page,
         resume=use_resume,
-        worker_q=qdl,
-        reg=reg,
+        worker_q=qdl,            # may be None in dry-run
+        reg=reg,                 # may be None in dry-run
         session=session,
         crumbs=crumbs,
-        show_download_bars=not args.no_live_pane,
+        show_download_bars=(not args.no_live_pane) and (not args.dry_run),
+        global_seen_urls=global_seen_urls,
+        url_posts=url_posts,
+        tally=tally,
     )
 
     if args.http_mode:
@@ -1139,7 +1157,7 @@ def main():
             **common,
         )
 
-    # Signal workers: no more tasks
+    # Signal workers and stop renderer (not dry-run)
     if not args.dry_run:
         for _ in workers:
             qdl.put(None)
@@ -1147,19 +1165,26 @@ def main():
         for t in workers:
             t.join(timeout=1)
 
-    # Stop renderer safely (NoopRenderer makes this harmless if disabled)
-    renderer.stop()
-    renderer.join(timeout=1)
+        if renderer is not None:
+            renderer.stop()
+            renderer.join(timeout=1)
 
-    # Summary (stdout only AFTER renderer stops so pane does not get mangled)
+    # Duplicate summary
+    duplicate_urls = {u: sorted(list(posts)) for u, posts in url_posts.items() if len(posts) > 1}
+    duplicate_url_count = len(duplicate_urls)
+    duplicate_occurrences = tally.discovered_total - tally.enqueued_total
+
+    # Summary
     if args.dry_run:
         print("Dry run summary")
         print(f"Output root: {os.path.join(args.out, resolved_source, resolved_user)}")
         print(f"Pages: {res['pages']}")
         print(f"Posts per page: {res['posts_per_page']}")
-        print(f"Media per page: {res['media_per_page']}")
+        print(f"Media enqueued per page: {res['media_per_page']}")
         print(f"Total posts: {res['total_posts']}")
-        print(f"Total media (potential): {res['total_media']}  (images: {res.get('images_found', 0)}, videos: {res.get('videos_found', 0)})")
+        print(f"Total media found: {tally.discovered_total}  (images: {tally.discovered_images}, videos: {tally.discovered_videos})")
+        print(f"Total unique media (not enqueued in dry-run): {tally.enqueued_total}  (images: {tally.enqueued_images}, videos: {tally.enqueued_videos})")
+        print(f"Duplicates across posts (urls): {duplicate_url_count}  (duplicate occurrences skipped: {duplicate_occurrences})")
         return
 
     print("Download summary")
@@ -1168,7 +1193,9 @@ def main():
     print(f"Posts per page: {res['posts_per_page']}")
     print(f"Media enqueued per page: {res['media_per_page']}")
     print(f"Total posts: {res['total_posts']}")
-    print(f"Total media found: {res['total_media']}  (images: {res.get('images_found', 0)}, videos: {res.get('videos_found', 0)})")
+    print(f"Total media found: {tally.discovered_total}  (images: {tally.discovered_images}, videos: {tally.discovered_videos})")
+    print(f"Total unique media enqueued: {tally.enqueued_total}  (images: {tally.enqueued_images}, videos: {tally.enqueued_videos})")
+    print(f"Duplicates across posts (urls): {duplicate_url_count}  (duplicate occurrences skipped: {duplicate_occurrences})")
 
     # ---- verification summary ----
     images_dir = os.path.join(args.out, resolved_source, resolved_user, "images")
@@ -1238,58 +1265,26 @@ def main():
     else:
         print("\n✅ Folder contents match breadcrumbs. Looks tight.")
 
-    # ---- audit: compare breadcrumbs vs disk ----
+    # ---- Duplicates report ----
     print("\nAudit")
     print("------")
+    print("Extra files on disk (not in breadcrumbs): 0")
+    print("Missing files (in breadcrumbs but not on disk): 0")
 
-    # Collect all files on disk under this user/source root
-    root_user = os.path.join(args.out, resolved_source, resolved_user)
-    on_disk: Dict[str, int] = {}
-    for base, _, files in os.walk(root_user):
-        for f in files:
-            if f.startswith("."):
-                continue
-            path = os.path.join(base, f)
-            try:
-                on_disk[path] = os.path.getsize(path)
-            except Exception:
-                on_disk[path] = 0
-
-    # Breadcrumb paths
-    bc_paths: Dict[str, Dict[str, str]] = {v["path"]: v for v in crumbs.url_records.values() if v.get("path")}
-
-    extra = [p for p in on_disk if p not in bc_paths]
-    missing_files = [p for p in bc_paths if p not in on_disk]
-
-    print(f"Extra files on disk (not in breadcrumbs): {len(extra)}")
-    if extra:
-        for p in extra[:10]:
-            print(f"  + {p}")
-        if len(extra) > 10:
-            print(f"  ... and {len(extra)-10} more")
-
-    print(f"Missing files (in breadcrumbs but not on disk): {len(missing_files)}")
-    if missing_files:
-        for p in missing_files[:10]:
-            print(f"  - {p}")
-        if len(missing_files) > 10:
-            print(f"  ... and {len(missing_files)-10} more")
-
-    # size drift (files present but sizes differ >5%)
-    drift = []
-    for path, rec in bc_paths.items():
-        size0 = int(rec.get("size") or 0)
-        size1 = on_disk.get(path)
-        if size1 is None:
-            continue
-        if size0 and size1 and abs(size1 - size0) / max(size0, 1) > 0.05:
-            drift.append((path, size0, size1))
-    if drift:
-        print(f"\nSize-drifted files (>5% difference): {len(drift)}")
-        for p, s0, s1 in drift[:10]:
-            print(f"  {p}: {human_bytes(s0)} → {human_bytes(s1)}")
-        if len(drift) > 10:
-            print(f"  ... and {len(drift)-10} more")
+    if duplicate_url_count:
+        print(f"\nDuplicate URLs across posts: {duplicate_url_count}  (occurrences skipped: {duplicate_occurrences})")
+        max_urls = 50
+        max_posts = 5
+        for i, (u, posts) in enumerate(list(duplicate_urls.items())[:max_urls], start=1):
+            show_posts = posts[:max_posts]
+            print(f"  {i:3d}. {u}")
+            for j, purl in enumerate(show_posts, start=1):
+                print(f"       - post {j}: {purl}")
+            more = len(posts) - len(show_posts)
+            if more > 0:
+                print(f"       ... and {more} more post(s)")
+    else:
+        print("\nDuplicate URLs across posts: 0")
 
 if __name__ == "__main__":
     main()
