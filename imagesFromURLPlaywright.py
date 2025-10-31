@@ -329,7 +329,7 @@ class Breadcrumbs:
                             "referer": rec.get("referer",""),
                             "size": rec.get("size", None)
                         }
-                            # tolerate older records without size
+                            # note: the indent diff here is to match original logic
                         self.url_records[rec["url"]] = entry
         except Exception:
             pass
@@ -345,14 +345,10 @@ class Breadcrumbs:
             pass
 
     def mark_post(self, url: str):
-        if not self.enable:
-            return
         self.visited_posts.add(url)
         self._append({"type": "post_visited", "post": url})
 
     def mark_media(self, url: str, path: str, referer: Optional[str] = "", size: Optional[int] = None):
-        if not self.enable:
-            return
         self.downloaded_urls.add(url)
         self.url_records[url] = {"path": path, "referer": referer or "", "size": size}
         self._append({"type": "media_downloaded", "url": url, "path": path, "referer": referer or "", "size": size})
@@ -411,6 +407,7 @@ class ProgressRegistry:
 
     def snapshot(self) -> List[Tuple[int, BarState]]:
         with self._lock:
+            # order by last_update (recent first), fallback to created_ts
             pairs = list(self._bars.items())
             pairs.sort(key=lambda kv: (kv[1].last_update or self._meta.get(kv[0], 0)), reverse=True)
             return pairs[:self.display_limit]
@@ -438,6 +435,7 @@ class PinnedRenderer(threading.Thread):
     - We clear to end-of-screen each tick to avoid duplicated lines.
     """
     def __init__(self, reg: ProgressRegistry, title: str = "downloads", live: bool = True, interval: float = 0.06, ansi: bool = True):
+        # Ensure the Thread part is initialized - this is what prevents "thread.__init__() not called"
         super().__init__(daemon=True, name="PinnedRenderer")
         self.reg = reg
         self.live = live
@@ -467,8 +465,8 @@ class PinnedRenderer(threading.Thread):
             while not self._stop_evt.is_set():
                 snap = self.reg.snapshot()
                 if self.ansi:
-                    sys.stdout.write("\x1b[u")
-                    sys.stdout.write("\x1b[J")
+                    sys.stdout.write("\x1b[u")  # restore cursor
+                    sys.stdout.write("\x1b[J")  # clear to end
                     if not snap:
                         sys.stdout.write("(idle)\n")
                     else:
@@ -482,7 +480,9 @@ class PinnedRenderer(threading.Thread):
                     sys.stdout.flush()
                 time.sleep(self.interval)
         finally:
+            # leave last state rendered
             pass
+
 
 # ---------------- download worker pool ----------------
 
@@ -499,7 +499,8 @@ def download_worker(name: str,
                     reg: ProgressRegistry,
                     session: requests.Session,
                     crumbs: Breadcrumbs,
-                    show_bar: bool):
+                    show_bar: bool,
+                    dry_run: bool):
     while True:
         task = q.get()
         if task is None:
@@ -508,6 +509,12 @@ def download_worker(name: str,
         url = task.url
         outdir = task.outdir
         referer = task.referer
+
+        if dry_run:
+            # just record that we would have downloaded
+            crumbs.mark_media(url, f"{outdir}/{filename_from_url(url)}", referer=referer or "", size=None)
+            q.task_done()
+            continue
 
         # Skip if file (any variant) exists
         fname = filename_from_url(url)
@@ -528,10 +535,10 @@ def download_worker(name: str,
         if referer:
             headers["Referer"] = referer
 
-        # Pre-get content-length for bar (skip for videos)
+        # Pre-get content-length for bar (skip for mp4 etc; it's slow and often blocked)
         total = None
         try:
-            if not is_video_url(url):
+            if not is_video_url(url):  # do not HEAD videos
                 r_head = session.head(url, headers=headers, allow_redirects=True, timeout=20)
                 cl = r_head.headers.get("content-length")
                 if cl and cl.isdigit():
@@ -642,8 +649,8 @@ def crawl_playwright(
     max_posts_per_page: int,
     resume: bool,
     # concurrency
-    worker_q: Optional["queue.Queue[Optional[DownloadTask]]"],
-    reg: Optional[ProgressRegistry],
+    worker_q: "queue.Queue[Optional[DownloadTask]]",
+    reg: ProgressRegistry,
     session: requests.Session,
     crumbs: Breadcrumbs,
     show_download_bars: bool,
@@ -698,7 +705,7 @@ def crawl_playwright(
             except Exception:
                 pass
 
-        visited_posts: Set[str] = set(crumbs.visited_posts) if (resume and crumbs.enable) else set()
+        visited_posts: Set[str] = set(crumbs.visited_posts) if resume else set()
 
         while True:
             # collect post links
@@ -729,9 +736,7 @@ def crawl_playwright(
                     continue
 
                 vlog(verbose, f"[page {page_index} post {idx}/{posts_count}] Visiting: {post_url}")
-
-                if not dry_run:
-                    crumbs.mark_post(post_url)
+                crumbs.mark_post(post_url)
                 visited_posts.add(post_url)
 
                 try:
@@ -760,6 +765,7 @@ def crawl_playwright(
                             continue
                         seen_in_post.add(u)
 
+                        # record post -> url mapping for duplicate reporting
                         url_posts.setdefault(u, set()).add(post_url)
 
                         if u in global_seen_urls:
@@ -767,22 +773,13 @@ def crawl_playwright(
                             continue
 
                         global_seen_urls.add(u)
-
-                        # In dry-run, do NOT enqueue or write breadcrumbs; just count as unique
-                        if dry_run:
-                            if is_image_url(u):
-                                tally.enqueued_images += 1
-                            elif is_video_url(u):
-                                tally.enqueued_videos += 1
-                        else:
-                            subdir = output_subdir(out_root, source, username, u)
-                            assert worker_q is not None
-                            worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
-                            page_media_enqueued += 1
-                            if is_image_url(u):
-                                tally.enqueued_images += 1
-                            elif is_video_url(u):
-                                tally.enqueued_videos += 1
+                        subdir = output_subdir(out_root, source, username, u)
+                        worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
+                        page_media_enqueued += 1
+                        if is_image_url(u):
+                            tally.enqueued_images += 1
+                        elif is_video_url(u):
+                            tally.enqueued_videos += 1
 
                     post.close()
                 except Exception as e:
@@ -833,8 +830,8 @@ def crawl_http(
     max_posts_per_page: int,
     resume: bool,
     # concurrency
-    worker_q: Optional["queue.Queue[Optional[DownloadTask]]"],
-    reg: Optional[ProgressRegistry],
+    worker_q: "queue.Queue[Optional[DownloadTask]]",
+    reg: ProgressRegistry,
     session: requests.Session,
     crumbs: Breadcrumbs,
     show_download_bars: bool,
@@ -861,7 +858,7 @@ def crawl_http(
             if cur > offset_max: break
             offsets.append(cur)
 
-    visited_posts: Set[str] = set(crumbs.visited_posts) if (resume and crumbs.enable) else set()
+    visited_posts: Set[str] = set(crumbs.visited_posts) if resume else set()
 
     for i, off in enumerate(offsets, start=1):
         list_url = page_template.format(offset=off) if page_template else set_query_param(start_url, "o", str(off))
@@ -892,9 +889,7 @@ def crawl_http(
                 continue
 
             vlog(verbose, f"[page {i} post {idx}/{posts_count}] Visiting: {post_url}")
-
-            if not dry_run:
-                crumbs.mark_post(post_url)
+            crumbs.mark_post(post_url)
             visited_posts.add(post_url)
 
             html_post = http_get(session, post_url, debug)
@@ -918,6 +913,7 @@ def crawl_http(
                         continue
                     seen_in_post.add(u)
 
+                    # record post -> url mapping for duplicate reporting
                     url_posts.setdefault(u, set()).add(post_url)
 
                     if u in global_seen_urls:
@@ -925,21 +921,13 @@ def crawl_http(
                         continue
 
                     global_seen_urls.add(u)
-
-                    if dry_run:
-                        if is_image_url(u):
-                            tally.enqueued_images += 1
-                        elif is_video_url(u):
-                            tally.enqueued_videos += 1
-                    else:
-                        subdir = output_subdir(out_root, source, username, u)
-                        assert worker_q is not None
-                        worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
-                        page_media_enqueued += 1
-                        if is_image_url(u):
-                            tally.enqueued_images += 1
-                        elif is_video_url(u):
-                            tally.enqueued_videos += 1
+                    subdir = output_subdir(out_root, source, username, u)
+                    worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
+                    page_media_enqueued += 1
+                    if is_image_url(u):
+                        tally.enqueued_images += 1
+                    elif is_video_url(u):
+                        tally.enqueued_videos += 1
             else:
                 vlog(verbose, "  └─ ERROR fetching post")
 
@@ -1064,46 +1052,45 @@ def main():
 
     args = ap.parse_args()
     page_template = (args.page_template or None)
-    use_resume = not args.no_resume and not args.dry_run  # never write state during dry-run
+    use_resume = not args.no_resume
 
     # Resolve source + username
     resolved_source = args.source.strip() or extract_source_from_url(args.url) or "source_unknown"
     resolved_user = args.username.strip() or extract_username_from_url(args.url) or "unknown_user"
 
-    # Ensure folders exist (only when not dry-run)
-    if not args.dry_run:
-        ensure_dir(os.path.join(args.out, resolved_source, resolved_user, "images"))
-        ensure_dir(os.path.join(args.out, resolved_source, resolved_user, "videos"))
+    # Ensure folders exist
+    ensure_dir(os.path.join(args.out, resolved_source, resolved_user, "images"))
+    ensure_dir(os.path.join(args.out, resolved_source, resolved_user, "videos"))
 
     # Shared session & breadcrumbs
     session = requests.Session()
     session.headers.update({"User-Agent": UA})
     crumbs = Breadcrumbs(args.out, resolved_source, resolved_user, enable=use_resume)
-    prev_downloaded = set(crumbs.downloaded_urls) if crumbs.enable else set()
+    prev_downloaded = set(crumbs.downloaded_urls)  # snapshot for "this run" deltas
 
-    # Progress registry + pinned renderer (only when not dry-run)
-    reg = None
-    renderer = None
-    if not args.dry_run:
-        reg = ProgressRegistry(leave_completed=args.leave_completed, display_limit=args.pane_lines)
-        renderer = PinnedRenderer(reg, title="downloads", live=not args.no_live_pane, ansi=not args.no_ansi)
-        try:
-            renderer.start()
-        except RuntimeError as e:
-            sys.stderr.write(f"[warn] live pane disabled: {e}\n")
-            renderer.live = False
+    # Progress registry + pinned renderer
+    reg = ProgressRegistry(leave_completed=args.leave_completed, display_limit=args.pane_lines)
+    renderer = PinnedRenderer(reg, title="downloads", live=not args.no_live_pane, ansi=not args.no_ansi)
+    renderer_started = False
+    try:
+        renderer.start()
+        renderer_started = True
+    except RuntimeError as e:
+        # Fallback silently to no live pane if thread init fails for any reason
+        sys.stderr.write(f"[warn] live pane disabled: {e}\n")
+        renderer.live = False
 
-    # Worker pool (only when not dry-run)
-    qdl = None
+    # Worker pool
+    qdl: "queue.Queue[Optional[DownloadTask]]" = queue.Queue(maxsize=args.workers * 2)
     workers: List[threading.Thread] = []
-    if not args.dry_run:
-        qdl = queue.Queue(maxsize=args.workers * 2)
-        for i in range(args.workers):
-            t = threading.Thread(target=download_worker,
-                                 args=(f"W{i+1}", qdl, reg, session, crumbs, not args.no_live_pane),
-                                 daemon=True)
-            t.start()
-            workers.append(t)
+    for i in range(args.workers):
+        t = threading.Thread(
+            target=download_worker,
+            args=(f"W{i+1}", qdl, reg, session, crumbs, not args.no_live_pane, args.dry_run),
+            daemon=True
+        )
+        t.start()
+        workers.append(t)
 
     # Global de-dupe structures and tally
     global_seen_urls: Set[str] = set()
@@ -1124,17 +1111,17 @@ def main():
         offset_max=args.offset_max if args.offset_max >= 0 else None,
         polite_delay=args.polite_delay,
         debug=args.debug,
-        show_progress=True,
+        show_progress=True,  # page one-liners to stderr
         min_bytes=args.min_bytes,
         verbose=args.verbose,
         print_urls=args.print_urls,
         max_posts_per_page=args.max_posts_per_page,
         resume=use_resume,
-        worker_q=qdl,            # may be None in dry-run
-        reg=reg,                 # may be None in dry-run
+        worker_q=qdl,
+        reg=reg,
         session=session,
         crumbs=crumbs,
-        show_download_bars=(not args.no_live_pane) and (not args.dry_run),
+        show_download_bars=not args.no_live_pane,
         global_seen_urls=global_seen_urls,
         url_posts=url_posts,
         tally=tally,
@@ -1157,7 +1144,7 @@ def main():
             **common,
         )
 
-    # Signal workers and stop renderer (not dry-run)
+    # Signal workers: no more tasks
     if not args.dry_run:
         for _ in workers:
             qdl.put(None)
@@ -1165,16 +1152,17 @@ def main():
         for t in workers:
             t.join(timeout=1)
 
-        if renderer is not None:
-            renderer.stop()
-            renderer.join(timeout=1)
+    # Stop renderer only if it actually started
+    if renderer_started:
+        renderer.stop()
+        renderer.join(timeout=1)
 
     # Duplicate summary
     duplicate_urls = {u: sorted(list(posts)) for u, posts in url_posts.items() if len(posts) > 1}
     duplicate_url_count = len(duplicate_urls)
-    duplicate_occurrences = tally.discovered_total - tally.enqueued_total
+    duplicate_occurrences = tally.discovered_total - tally.enqueued_total  # total times duplicates caused skips
 
-    # Summary
+    # Summary (stdout only AFTER renderer stops so pane does not get mangled)
     if args.dry_run:
         print("Dry run summary")
         print(f"Output root: {os.path.join(args.out, resolved_source, resolved_user)}")
@@ -1183,7 +1171,7 @@ def main():
         print(f"Media enqueued per page: {res['media_per_page']}")
         print(f"Total posts: {res['total_posts']}")
         print(f"Total media found: {tally.discovered_total}  (images: {tally.discovered_images}, videos: {tally.discovered_videos})")
-        print(f"Total unique media (not enqueued in dry-run): {tally.enqueued_total}  (images: {tally.enqueued_images}, videos: {tally.enqueued_videos})")
+        print(f"Total unique media enqueued: {tally.enqueued_total}  (images: {tally.enqueued_images}, videos: {tally.enqueued_videos})")
         print(f"Duplicates across posts (urls): {duplicate_url_count}  (duplicate occurrences skipped: {duplicate_occurrences})")
         return
 
@@ -1273,6 +1261,7 @@ def main():
 
     if duplicate_url_count:
         print(f"\nDuplicate URLs across posts: {duplicate_url_count}  (occurrences skipped: {duplicate_occurrences})")
+        # Show up to 50 duplicate URLs with up to 5 posts each
         max_urls = 50
         max_posts = 5
         for i, (u, posts) in enumerate(list(duplicate_urls.items())[:max_urls], start=1):
