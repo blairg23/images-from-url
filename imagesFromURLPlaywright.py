@@ -3,12 +3,12 @@
 Concurrent gallery scraper - Playwright or HTTP-only - with:
 
 • Fast producer/consumer pipeline (N download workers)
-• Live "pinned" progress pane at the bottom (no screen flooding)
+• Live pinned progress pane at the bottom (no screen flooding)
 • One bar per active download; finished bars disappear (configurable)
 • Resume via breadcrumbs; skip existing files; size filter
 • End-of-run verification + auto-retry of missing files
 • Global duplicate tracking across posts (with per-URL list of post pages)
-• Disk vs state audit (extra vs missing)
+• Strict disk vs state audit (reports disk-only files)
 
 Output layout:
   <out>/<source>/<username>/{images,videos}/...
@@ -44,8 +44,10 @@ try:
 except Exception:
     PLAYWRIGHT_AVAILABLE = False
 
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 DEFAULT_TIMEOUT_MS = 45000
 ACCEPTABLE_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff"}
 ACCEPTABLE_VIDEO_EXT = {".mp4", ".webm", ".mkv", ".mov"}
@@ -93,7 +95,7 @@ def extract_source_from_url(u: str) -> Optional[str]:
     path = urlparse(u).path.strip("/")
     parts = path.split("/")
     for i in range(len(parts) - 1):
-        if parts[i+1] == "user":
+        if parts[i + 1] == "user":
             return parts[i].lower()
     return parts[0].lower() if parts else None
 
@@ -105,14 +107,16 @@ def human_bytes(n: Optional[int]) -> str:
     if n is None:
         return "?"
     v = float(n)
-    for unit in ["B","KB","MB","GB","TB"]:
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
         if v < 1024.0 or unit == "TB":
             return f"{v:.1f} {unit}" if unit != "B" else f"{int(v)} B"
         v /= 1024.0
     return f"{v:.1f} PB"
 
 def set_query_param(u: str, key: str, value: str) -> str:
-    p = urlparse(u); q = parse_qs(p.query); q[key] = [str(value)]
+    p = urlparse(u)
+    q = parse_qs(p.query)
+    q[key] = [str(value)]
     return urlunparse((p.scheme, p.netloc, p.path, p.params, urlencode(q, doseq=True), ""))
 
 def count_files_with_exts(root: str, exts: set[str]) -> int:
@@ -182,7 +186,14 @@ def collect_media_pairs(html: str, base_url: str) -> List[Tuple[str, bool]]:
         box = soup.select_one(".post__files")
         if box:
             for img in box.find_all("img"):
-                for attr in ["data-full", "data-original", "data-large", "data-image", "data-src", "src"]:
+                for attr in [
+                    "data-full",
+                    "data-original",
+                    "data-large",
+                    "data-image",
+                    "data-src",
+                    "src",
+                ]:
                     val = img.get(attr)
                     if val:
                         u = norm_url(urljoin(base_url, val))
@@ -197,7 +208,10 @@ def collect_media_pairs(html: str, base_url: str) -> List[Tuple[str, bool]]:
     return [(u, seen[u]) for u in seen.keys()]
 
 def count_kinds(urls: List[str]) -> Tuple[int, int]:
-    return sum(1 for u in urls if is_image_url(u)), sum(1 for u in urls if is_video_url(u))
+    return (
+        sum(1 for u in urls if is_image_url(u)),
+        sum(1 for u in urls if is_video_url(u)),
+    )
 
 def http_list_post_links(html: str, base_url: str, post_selector: str, article_anchor_selector: str) -> List[str]:
     soup = BeautifulSoup(html, "lxml")
@@ -212,7 +226,8 @@ def http_list_post_links(html: str, base_url: str, post_selector: str, article_a
     seen = set()
     for u in links:
         if u not in seen:
-            seen.add(u); uniq.append(u)
+            seen.add(u)
+            uniq.append(u)
     return uniq
 
 # ---------------- paginator helpers ----------------
@@ -239,12 +254,19 @@ def wait_until_expected_posts(page, post_selector: str, paginator_summary_select
         page.wait_for_function(
             """([sel, expected]) => document.querySelectorAll(sel).length >= expected""",
             arg=[post_selector, page_size],
-            timeout=selector_timeout_ms
+            timeout=selector_timeout_ms,
         )
     except Exception:
         dprint(debug, f"wait_until_expected_posts: timeout before reaching expected count ({page_size})")
 
-def get_article_post_links(page, post_selector: str, article_anchor_selector: str, paginator_summary_selector: str, selector_timeout_ms: int, debug: bool) -> List[str]:
+def get_article_post_links(
+    page,
+    post_selector: str,
+    article_anchor_selector: str,
+    paginator_summary_selector: str,
+    selector_timeout_ms: int,
+    debug: bool,
+) -> List[str]:
     try:
         page.wait_for_selector(post_selector, timeout=selector_timeout_ms)
         wait_until_expected_posts(page, post_selector, paginator_summary_selector, selector_timeout_ms, debug)
@@ -263,14 +285,15 @@ def get_article_post_links(page, post_selector: str, article_anchor_selector: st
                 }});
             }}
             return out;
-        }}"""
+        }}""",
     )
     uniq = []
     seen = set()
     for href in links:
         u = norm_url(href)
         if u not in seen:
-            seen.add(u); uniq.append(u)
+            seen.add(u)
+            uniq.append(u)
     return uniq
 
 # ---------------- skip/paths/resume ----------------
@@ -326,9 +349,9 @@ class Breadcrumbs:
                     elif t == "media_downloaded" and rec.get("url"):
                         self.downloaded_urls.add(rec["url"])
                         entry = {
-                            "path": rec.get("path",""),
-                            "referer": rec.get("referer",""),
-                            "size": rec.get("size", None)
+                            "path": rec.get("path", ""),
+                            "referer": rec.get("referer", ""),
+                            "size": rec.get("size", None),
                         }
                         self.url_records[rec["url"]] = entry
         except Exception:
@@ -351,12 +374,20 @@ class Breadcrumbs:
     def mark_media(self, url: str, path: str, referer: Optional[str] = "", size: Optional[int] = None):
         self.downloaded_urls.add(url)
         self.url_records[url] = {"path": path, "referer": referer or "", "size": size}
-        self._append({"type": "media_downloaded", "url": url, "path": path, "referer": referer or "", "size": size})
+        self._append(
+            {
+                "type": "media_downloaded",
+                "url": url,
+                "path": path,
+                "referer": referer or "",
+                "size": size,
+            }
+        )
 
 # ---------------- progress pane (pinned, non-flooding) ----------------
 
 class BarState:
-    __slots__ = ("label","total","downloaded","ok","failed","start_ts","last_update")
+    __slots__ = ("label", "total", "downloaded", "ok", "failed", "start_ts", "last_update")
     def __init__(self, label: str, total: Optional[int]):
         self.label = label
         self.total = total
@@ -368,20 +399,21 @@ class BarState:
 
 def human_speed(downloaded: int, start_ts: float) -> str:
     elapsed = max(1e-6, time.time() - start_ts)
-    return f"{human_bytes(int(downloaded/elapsed))}/s"
+    return f"{human_bytes(int(downloaded / elapsed))}/s"
 
 class ProgressRegistry:
     def __init__(self, leave_completed: bool, display_limit: int):
         self._lock = threading.Lock()
         self._bars: Dict[int, BarState] = {}
-        self._meta: Dict[int, float] = {}  # bar_id -> created_ts
+        self._meta: Dict[int, float] = {}
         self._next_id = 1
         self.leave_completed = leave_completed
         self.display_limit = max(1, display_limit)
 
     def new_bar(self, label: str, total: Optional[int]) -> int:
         with self._lock:
-            bar_id = self._next_id; self._next_id += 1
+            bar_id = self._next_id
+            self._next_id += 1
             self._bars[bar_id] = BarState(label, total)
             self._meta[bar_id] = time.time()
             return bar_id
@@ -389,16 +421,20 @@ class ProgressRegistry:
     def update(self, bar_id: int, incr: int):
         with self._lock:
             b = self._bars.get(bar_id)
-            if not b: return
+            if not b:
+                return
             b.downloaded += incr
             b.last_update = time.time()
 
     def finish(self, bar_id: int, ok: bool):
         with self._lock:
             b = self._bars.get(bar_id)
-            if not b: return
-            if ok: b.ok = True
-            else: b.failed = True
+            if not b:
+                return
+            if ok:
+                b.ok = True
+            else:
+                b.failed = True
             b.last_update = time.time()
             if not self.leave_completed:
                 del self._bars[bar_id]
@@ -408,7 +444,7 @@ class ProgressRegistry:
         with self._lock:
             pairs = list(self._bars.items())
             pairs.sort(key=lambda kv: (kv[1].last_update or self._meta.get(kv[0], 0)), reverse=True)
-            return pairs[:self.display_limit]
+            return pairs[: self.display_limit]
 
 def render_line(b: BarState, width: int = 30) -> str:
     total = b.total
@@ -416,23 +452,30 @@ def render_line(b: BarState, width: int = 30) -> str:
         frac = min(1.0, b.downloaded / total)
         filled = int(frac * width)
         bar = "#" * filled + "-" * (width - filled)
-        pct = f"{int(frac*100):3d}%"
-        status = "✓" if b.ok else "✖" if b.failed else "…"
-        return f"[{bar}] {pct}  {human_bytes(b.downloaded)}/{human_bytes(total)}  {human_speed(b.downloaded,b.start_ts)} {status} {b.label}"
+        pct = f"{int(frac * 100):3d}%"
+        status = "✓" if b.ok else "✖" if b.failed else "..."
+        return (
+            f"[{bar}] {pct}  {human_bytes(b.downloaded)}/{human_bytes(total)}  "
+            f"{human_speed(b.downloaded, b.start_ts)} {status} {b.label}"
+        )
     else:
-        dots = min(width, int((b.downloaded / (1<<18)) % (width+1)))
+        dots = min(width, int((b.downloaded / (1 << 18)) % (width + 1)))
         bar = "•" * dots + " " * (width - dots)
-        status = "✓" if b.ok else "✖" if b.failed else "…"
-        return f"[{bar}]  {human_bytes(b.downloaded)}  {human_speed(b.downloaded,b.start_ts)} {status} {b.label}"
+        status = "✓" if b.ok else "✖" if b.failed else "..."
+        return f"[{bar}]  {human_bytes(b.downloaded)}  {human_speed(b.downloaded, b.start_ts)} {status} {b.label}"
 
 class PinnedRenderer(threading.Thread):
     """
     Renders a pinned pane that lives below a static separator line.
-    - All logs should go to STDERR; the pane uses STDOUT only.
-    - We print a separator once, save cursor pos, then restore & redraw in place.
-    - We clear to end-of-screen each tick to avoid duplicated lines.
     """
-    def __init__(self, reg: ProgressRegistry, title: str = "downloads", live: bool = True, interval: float = 0.06, ansi: bool = True):
+    def __init__(
+        self,
+        reg: ProgressRegistry,
+        title: str = "downloads",
+        live: bool = True,
+        interval: float = 0.06,
+        ansi: bool = True,
+    ):
         super().__init__(daemon=True, name="PinnedRenderer")
         self.reg = reg
         self.live = live
@@ -448,7 +491,7 @@ class PinnedRenderer(threading.Thread):
     def _init_pane(self):
         if not self.ansi:
             return
-        sys.stdout.write("\n" + "="*16 + f" {self._title} " + "="*16 + "\n")
+        sys.stdout.write("\n" + "=" * 16 + f" {self._title} " + "=" * 16 + "\n")
         sys.stdout.write("\x1b[s")
         sys.stdout.flush()
         self._initialized = True
@@ -482,20 +525,21 @@ class PinnedRenderer(threading.Thread):
 # ---------------- download worker pool ----------------
 
 class DownloadTask:
-    __slots__ = ("url","referer","outdir","record_key")
+    __slots__ = ("url", "referer", "outdir", "record_key")
     def __init__(self, url: str, referer: Optional[str], outdir: str, record_key: str):
         self.url = url
         self.referer = referer
         self.outdir = outdir
         self.record_key = record_key
 
-def download_worker(name: str,
-                    q: "queue.Queue[Optional[DownloadTask]]",
-                    reg: ProgressRegistry,
-                    session: requests.Session,
-                    crumbs: Breadcrumbs,
-                    show_bar: bool,
-                    dry_run: bool):
+def download_worker(
+    name: str,
+    q: "queue.Queue[Optional[DownloadTask]]",
+    reg: ProgressRegistry,
+    session: requests.Session,
+    crumbs: Breadcrumbs,
+    show_bar: bool,
+):
     while True:
         task = q.get()
         if task is None:
@@ -513,11 +557,6 @@ def download_worker(name: str,
             except Exception:
                 size_on_disk = None
             crumbs.mark_media(url, existing, referer=referer or "", size=size_on_disk)
-            q.task_done()
-            continue
-
-        if dry_run:
-            crumbs.mark_media(url, os.path.join(outdir, fname), referer=referer or "", size=None)
             q.task_done()
             continue
 
@@ -545,7 +584,7 @@ def download_worker(name: str,
             with session.get(url, headers=headers, stream=True, timeout=120) as r:
                 r.raise_for_status()
                 with open(tmp, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1<<15):
+                    for chunk in r.iter_content(chunk_size=1 << 15):
                         if not chunk:
                             continue
                         f.write(chunk)
@@ -560,7 +599,8 @@ def download_worker(name: str,
             crumbs.mark_media(url, path, referer=referer or "", size=size_on_disk)
         except requests.RequestException:
             try:
-                if os.path.exists(tmp): os.remove(tmp)
+                if os.path.exists(tmp):
+                    os.remove(tmp)
             except Exception:
                 pass
         finally:
@@ -570,12 +610,14 @@ def download_worker(name: str,
 
 # ---------------- size filter w/ trust ----------------
 
-def size_filter_with_trust(pairs: List[Tuple[str, bool]],
-                           session: requests.Session,
-                           min_bytes: int,
-                           verbose: bool,
-                           debug: bool,
-                           referer: Optional[str]) -> List[str]:
+def size_filter_with_trust(
+    pairs: List[Tuple[str, bool]],
+    session: requests.Session,
+    min_bytes: int,
+    verbose: bool,
+    debug: bool,
+    referer: Optional[str],
+) -> List[str]:
     if min_bytes <= 0:
         return [u for (u, _) in pairs]
     kept: List[str] = []
@@ -590,7 +632,7 @@ def size_filter_with_trust(pairs: List[Tuple[str, bool]],
         if sz is None or sz >= min_bytes:
             kept.append(u)
         else:
-            vlog(verbose, f"  └─ skip small {sz} B (< {min_bytes} B): {u}")
+            vlog(verbose, f"  ... skip small {sz} B (< {min_bytes} B): {u}")
             dprint(debug, f"skip small ({sz} B < {min_bytes} B): {u}")
     return kept
 
@@ -654,16 +696,37 @@ def crawl_playwright(
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headful)
-        context = p.chromium.launch_persistent_context(
-            user_data_dir="",
-            headless=not headful,
-            user_agent=UA,
-        ) if headful else browser.new_context(user_agent=UA)
+        context = (
+            p.chromium.launch_persistent_context(
+                user_data_dir="",
+                headless=not headful,
+                user_agent=UA,
+            )
+            if headful
+            else browser.new_context(user_agent=UA)
+        )
 
         if block_list_media:
             def _route(route, request):
                 url = request.url.lower()
-                if any(url.endswith(ext) for ext in [".png",".jpg",".jpeg",".gif",".webp",".mp4",".webm",".mkv",".mov",".css",".woff",".woff2",".ttf"]):
+                if any(
+                    url.endswith(ext)
+                    for ext in [
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".gif",
+                        ".webp",
+                        ".mp4",
+                        ".webm",
+                        ".mkv",
+                        ".mov",
+                        ".css",
+                        ".woff",
+                        ".woff2",
+                        ".ttf",
+                    ]
+                ):
                     return route.abort()
                 return route.continue_()
             context.route("**/*", _route)
@@ -673,10 +736,17 @@ def crawl_playwright(
         def goto_and_wait(url: str):
             dprint(debug, f"goto: {url}")
             page.goto(url, wait_until="domcontentloaded", timeout=selector_timeout_ms)
-            if sleep_after_goto > 0: time.sleep(sleep_after_goto)
+            if sleep_after_goto > 0:
+                time.sleep(sleep_after_goto)
             try:
                 page.wait_for_selector(post_selector, timeout=selector_timeout_ms)
-                wait_until_expected_posts(page, post_selector, paginator_summary_selector, selector_timeout_ms, debug)
+                wait_until_expected_posts(
+                    page,
+                    post_selector,
+                    paginator_summary_selector,
+                    selector_timeout_ms,
+                    debug,
+                )
             except Exception:
                 pass
 
@@ -698,14 +768,25 @@ def crawl_playwright(
 
         while True:
             for attempt in range(1, retry_pages + 1):
-                post_links = get_article_post_links(page, post_selector, article_anchor_selector, paginator_summary_selector, selector_timeout_ms, debug)
+                post_links = get_article_post_links(
+                    page,
+                    post_selector,
+                    article_anchor_selector,
+                    paginator_summary_selector,
+                    selector_timeout_ms,
+                    debug,
+                )
                 if post_links:
                     break
                 dprint(debug, f"no posts found (attempt {attempt}/{retry_pages}); retrying")
-                time.sleep(0.6); goto_and_wait(page.url)
+                time.sleep(0.6)
+                goto_and_wait(page.url)
 
             if max_posts_per_page > 0 and len(post_links) > max_posts_per_page:
-                vlog(verbose, f"⚠️  Capping posts on this page to --max-posts-per-page={max_posts_per_page} (found {len(post_links)})")
+                vlog(
+                    verbose,
+                    f"⚠️  Capping posts on this page to --max-posts-per-page={max_posts_per_page} (found {len(post_links)})",
+                )
                 post_links = post_links[:max_posts_per_page]
 
             posts_count = len(post_links)
@@ -730,21 +811,30 @@ def crawl_playwright(
                 try:
                     post = context.new_page()
                     post.goto(post_url, wait_until="domcontentloaded", timeout=selector_timeout_ms)
-                    if sleep_after_goto > 0: time.sleep(sleep_after_goto)
+                    if sleep_after_goto > 0:
+                        time.sleep(sleep_after_goto)
                     html = post.content()
 
                     pairs = collect_media_pairs(html, post_url)
                     media_urls_all = [u for (u, _) in pairs]
                     imgs_all, vids_all = count_kinds(media_urls_all)
-                    vlog(verbose, f"  ├─ found {len(media_urls_all)} media ({imgs_all} images, {vids_all} videos)")
+                    vlog(verbose, f"  ... found {len(media_urls_all)} media ({imgs_all} images, {vids_all} videos)")
                     if verbose and print_urls:
-                        for u in media_urls_all: vlog(True, f"  │   {u}")
+                        for u in media_urls_all:
+                            vlog(True, f"    {u}")
 
-                    media_urls = size_filter_with_trust(pairs, session, min_bytes, verbose, debug, referer=post_url)
+                    media_urls = size_filter_with_trust(
+                        pairs,
+                        session,
+                        min_bytes,
+                        verbose,
+                        debug,
+                        referer=post_url,
+                    )
                     imgs, vids = count_kinds(media_urls)
                     tally.discovered_images += imgs
                     tally.discovered_videos += vids
-                    vlog(verbose, f"  ├─ kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
+                    vlog(verbose, f"  ... kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
 
                     seen_in_post: Set[str] = set()
                     for u in media_urls:
@@ -755,10 +845,18 @@ def crawl_playwright(
                         url_posts.setdefault(u, set()).add(post_url)
 
                         if u in global_seen_urls:
-                            dprint(debug, f"  └─ global-dup (skip enqueue): {u}")
+                            dprint(debug, f"  ... global-dup (skip enqueue): {u}")
                             continue
 
                         global_seen_urls.add(u)
+
+                        if dry_run:
+                            if is_image_url(u):
+                                tally.enqueued_images += 1
+                            elif is_video_url(u):
+                                tally.enqueued_videos += 1
+                            continue
+
                         subdir = output_subdir(out_root, source, username, u)
                         worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
                         page_media_enqueued += 1
@@ -769,7 +867,7 @@ def crawl_playwright(
 
                     post.close()
                 except Exception as e:
-                    vlog(verbose, f"  └─ ERROR visiting post: {e}")
+                    vlog(verbose, f"  ... ERROR visiting post: {e}")
 
             media_per_page.append(page_media_enqueued)
 
@@ -783,7 +881,8 @@ def crawl_playwright(
             page_index += 1
             time.sleep(max(0.0, polite_delay))
 
-        context.close(); browser.close()
+        context.close()
+        browser.close()
 
     return {
         "pages": len(posts_per_page),
@@ -838,7 +937,8 @@ def crawl_http(
         cur = start_o
         while True:
             cur += offset_step
-            if cur > offset_max: break
+            if cur > offset_max:
+                break
             offsets.append(cur)
 
     visited_posts: Set[str] = set(crumbs.visited_posts) if resume else set()
@@ -848,12 +948,16 @@ def crawl_http(
         dprint(debug, f"[HTTP] list url: {list_url}")
 
         html = http_get(session, list_url, debug)
-        if not html: break
+        if not html:
+            break
 
         post_links = http_list_post_links(html, list_url, post_selector, article_anchor_selector)
 
         if max_posts_per_page > 0 and len(post_links) > max_posts_per_page:
-            vlog(verbose, f"⚠️  Capping posts on this page to --max-posts-per-page={max_posts_per_page} (found {len(post_links)})")
+            vlog(
+                verbose,
+                f"⚠️  Capping posts on this page to --max-posts-per-page={max_posts_per_page} (found {len(post_links)})",
+            )
             post_links = post_links[:max_posts_per_page]
 
         posts_count = len(post_links)
@@ -880,15 +984,23 @@ def crawl_http(
                 pairs = collect_media_pairs(html_post, post_url)
                 media_urls_all = [u for (u, _) in pairs]
                 imgs_all, vids_all = count_kinds(media_urls_all)
-                vlog(verbose, f"  ├─ found {len(media_urls_all)} media ({imgs_all} images, {vids_all} videos)")
+                vlog(verbose, f"  ... found {len(media_urls_all)} media ({imgs_all} images, {vids_all} videos)")
                 if verbose and print_urls:
-                    for u in media_urls_all: vlog(True, f"  │   {u}")
+                    for u in media_urls_all:
+                        vlog(True, f"    {u}")
 
-                media_urls = size_filter_with_trust(pairs, session, min_bytes, verbose, debug, referer=post_url)
+                media_urls = size_filter_with_trust(
+                    pairs,
+                    session,
+                    min_bytes,
+                    verbose,
+                    debug,
+                    referer=post_url,
+                )
                 imgs, vids = count_kinds(media_urls)
                 tally.discovered_images += imgs
                 tally.discovered_videos += vids
-                vlog(verbose, f"  ├─ kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
+                vlog(verbose, f"  ... kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
 
                 seen_in_post: Set[str] = set()
                 for u in media_urls:
@@ -899,10 +1011,18 @@ def crawl_http(
                     url_posts.setdefault(u, set()).add(post_url)
 
                     if u in global_seen_urls:
-                        dprint(debug, f"  └─ global-dup (skip enqueue): {u}")
+                        dprint(debug, f"  ... global-dup (skip enqueue): {u}")
                         continue
 
                     global_seen_urls.add(u)
+
+                    if dry_run:
+                        if is_image_url(u):
+                            tally.enqueued_images += 1
+                        elif is_video_url(u):
+                            tally.enqueued_videos += 1
+                        continue
+
                     subdir = output_subdir(out_root, source, username, u)
                     worker_q.put(DownloadTask(u, post_url, subdir, record_key=post_url))
                     page_media_enqueued += 1
@@ -911,13 +1031,14 @@ def crawl_http(
                     elif is_video_url(u):
                         tally.enqueued_videos += 1
             else:
-                vlog(verbose, "  └─ ERROR fetching post")
+                vlog(verbose, "  ... ERROR fetching post")
 
             time.sleep(0.02)
 
         media_per_page.append(page_media_enqueued)
 
-        if max_pages > 0 and i >= max_pages: break
+        if max_pages > 0 and i >= max_pages:
+            break
         time.sleep(max(0.0, polite_delay))
 
     return {
@@ -934,13 +1055,15 @@ def file_exists_for_url(out_root: str, source: str, username: str, url: str) -> 
     name = filename_from_url(url)
     return any_variant_exists(subdir, name)
 
-def retry_missing_downloads(missing_urls: List[str],
-                            out_root: str,
-                            source: str,
-                            username: str,
-                            session: requests.Session,
-                            crumbs: Breadcrumbs,
-                            verbose: bool) -> Tuple[List[str], List[str]]:
+def retry_missing_downloads(
+    missing_urls: List[str],
+    out_root: str,
+    source: str,
+    username: str,
+    session: requests.Session,
+    crumbs: Breadcrumbs,
+    verbose: bool,
+) -> Tuple[List[str], List[str]]:
     ok, bad = [], []
     for u in missing_urls:
         subdir = output_subdir(out_root, source, username, u)
@@ -961,7 +1084,7 @@ def retry_missing_downloads(missing_urls: List[str],
             with session.get(u, headers=headers, stream=True, timeout=120) as r:
                 r.raise_for_status()
                 with open(tmp, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1<<15):
+                    for chunk in r.iter_content(chunk_size=1 << 15):
                         if chunk:
                             f.write(chunk)
             os.replace(tmp, path)
@@ -973,14 +1096,15 @@ def retry_missing_downloads(missing_urls: List[str],
             ok.append(u)
         except Exception as e:
             try:
-                if os.path.exists(tmp): os.remove(tmp)
+                if os.path.exists(tmp):
+                    os.remove(tmp)
             except Exception:
                 pass
             bad.append(u)
             vlog(True, f"  ✖ retry failed: {u}  ({e})")
     return ok, bad
 
-# ---------------- disk vs state audit helpers ----------------
+# ---------------- helper for strict audit ----------------
 
 def to_media_rel(path: str) -> Optional[str]:
     path = path.replace("\\", "/")
@@ -989,66 +1113,96 @@ def to_media_rel(path: str) -> Optional[str]:
         return None
     return m.group(0)
 
-def load_state_media_paths(state_path: str) -> Set[str]:
-    seen: Set[str] = set()
-    if not os.path.exists(state_path):
-        return seen
-    with open(state_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if rec.get("type") != "media_downloaded":
-                continue
-            p = rec.get("path") or ""
-            rel = to_media_rel(p)
-            if rel:
-                seen.add(rel)
-    return seen
-
-def list_disk_media(root_user_dir: str) -> Set[str]:
-    disk: Set[str] = set()
-    for sub in ("images", "videos"):
-        base = os.path.join(root_user_dir, sub)
-        if not os.path.isdir(base):
+def disk_media_set(images_dir: str, videos_dir: str) -> Set[str]:
+    out: Set[str] = set()
+    for root in (images_dir, videos_dir):
+        if not os.path.isdir(root):
             continue
-        for dirpath, _, filenames in os.walk(base):
+        for dirpath, _, filenames in os.walk(root):
             for fn in filenames:
                 full = os.path.join(dirpath, fn).replace("\\", "/")
                 rel = to_media_rel(full)
                 if rel:
-                    disk.add(rel)
-    return disk
+                    out.add(rel)
+    return out
+
+def state_media_set(crumbs: Breadcrumbs) -> Set[str]:
+    out: Set[str] = set()
+    for rec in crumbs.url_records.values():
+        p = rec.get("path") or ""
+        rel = to_media_rel(p)
+        if rel:
+            out.add(rel)
+    return out
 
 # ---------------- CLI ----------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Concurrent gallery scraper - pinned progress pane + resume + skip existing + verification + auto-retry + global de-dupe with audit.")
+    ap = argparse.ArgumentParser(
+        description="Concurrent gallery scraper - pinned progress pane + resume + skip existing + verification + auto-retry + global de-dupe with audit."
+    )
     ap.add_argument("url", help="Starting list URL (e.g., ...?o=0)")
     ap.add_argument("--dry-run", action="store_true", help="Only report counts (no downloads)")
 
     ap.add_argument("--out", default="downloads", help="Parent output directory")
-    ap.add_argument("--username", default="", help="Folder under --out/<source>/; if omitted, derived from '/user/<name>' in URL")
-    ap.add_argument("--source", default="", help="Top-level under --out; if omitted, derived from path segment before '/user'")
+    ap.add_argument(
+        "--username",
+        default="",
+        help="Folder under --out/<source>/; if omitted, derived from '/user/<name>' in URL",
+    )
+    ap.add_argument(
+        "--source",
+        default="",
+        help="Top-level under --out; if omitted, derived from path segment before '/user'",
+    )
 
-    ap.add_argument("--max-pages", type=int, default=0, help="Limit number of list pages processed (0 = no limit)")
-    ap.add_argument("--max-posts-per-page", type=int, default=0, help="Only process first N posts per page (debug)")
+    ap.add_argument(
+        "--max-pages",
+        type=int,
+        default=0,
+        help="Limit number of list pages processed (0 = no limit)",
+    )
+    ap.add_argument(
+        "--max-posts-per-page",
+        type=int,
+        default=0,
+        help="Only process first N posts per page (debug)",
+    )
 
-    ap.add_argument("--post-selector", default=".card-list__items article", help="CSS for post entries on the list page")
-    ap.add_argument("--article-anchor-selector", default="a[href]", help="CSS inside each article that links to the post page")
+    ap.add_argument(
+        "--post-selector",
+        default=".card-list__items article",
+        help="CSS for post entries on the list page",
+    )
+    ap.add_argument(
+        "--article-anchor-selector",
+        default="a[href]",
+        help="CSS inside each article that links to the post page",
+    )
 
     ap.add_argument("--page-template", default="", help='Template with {offset}; e.g. "...?o={offset}"')
     ap.add_argument("--offset-step", type=int, default=50, help="Offset increment")
-    ap.add_argument("--offset-max", type=int, default=350, help="Stop when offset > this; use -1 to skip cap/auto")
+    ap.add_argument(
+        "--offset-max",
+        type=int,
+        default=350,
+        help="Stop when offset > this; use -1 to skip cap/auto",
+    )
 
     ap.add_argument("--headful", action="store_true", help="Visible browser (debug)")
     ap.add_argument("--block-list-media", action="store_true", help="Block heavy assets on list pages")
-    ap.add_argument("--retry-pages", type=int, default=2, help="Retries for extracting a list page")
-    ap.add_argument("--selector-timeout-ms", type=int, default=DEFAULT_TIMEOUT_MS, help="Timeout for navigation/selectors (ms)")
+    ap.add_argument(
+        "--retry-pages",
+        type=int,
+        default=2,
+        help="Retries for extracting a list page",
+    )
+    ap.add_argument(
+        "--selector-timeout-ms",
+        type=int,
+        default=DEFAULT_TIMEOUT_MS,
+        help="Timeout for navigation/selectors (ms)",
+    )
     ap.add_argument("--sleep-after-goto", type=float, default=0.3, help="Sleep after goto (s)")
     ap.add_argument("--polite-delay", type=float, default=0.4, help="Delay between list pages (s)")
     ap.add_argument("--debug", action="store_true", help="Debug logs to stderr")
@@ -1060,16 +1214,25 @@ def main():
     ap.add_argument("--no-live-pane", action="store_true", help="Disable live pinned progress pane")
     ap.add_argument("--no-ansi", action="store_true", help="Disable ANSI control in renderer")
     ap.add_argument("--pane-lines", type=int, default=8, help="Max number of active bars shown in the pane")
-    ap.add_argument("--leave-completed", action="store_true", help="Keep completed bars visible (still capped by --pane-lines)")
+    ap.add_argument(
+        "--leave-completed",
+        action="store_true",
+        help="Keep completed bars visible (still capped by --pane-lines)",
+    )
 
-    ap.add_argument("--min-bytes", type=int, default=100_000, help="Skip NON-TRUSTED files smaller than this via HEAD (0 = disable)")
+    ap.add_argument(
+        "--min-bytes",
+        type=int,
+        default=100_000,
+        help="Skip NON-TRUSTED files smaller than this via HEAD (0 = disable)",
+    )
 
     ap.add_argument("--no-resume", action="store_true", help="Disable state file and resume behavior")
 
     ap.add_argument("--workers", type=int, default=6, help="Number of parallel download workers")
 
     args = ap.parse_args()
-    page_template = (args.page_template or None)
+    page_template = args.page_template or None
     use_resume = not args.no_resume
 
     resolved_source = args.source.strip() or extract_source_from_url(args.url) or "source_unknown"
@@ -1084,23 +1247,32 @@ def main():
     prev_downloaded = set(crumbs.downloaded_urls)
 
     reg = ProgressRegistry(leave_completed=args.leave_completed, display_limit=args.pane_lines)
-    renderer = PinnedRenderer(reg, title="downloads", live=not args.no_live_pane, ansi=not args.no_ansi)
+
+    renderer: Optional[PinnedRenderer] = None
     try:
+        renderer = PinnedRenderer(
+            reg,
+            title="downloads",
+            live=not args.no_live_pane,
+            ansi=not args.no_ansi,
+        )
         renderer.start()
     except RuntimeError as e:
         sys.stderr.write(f"[warn] live pane disabled: {e}\n")
-        renderer.live = False
+        renderer = None
 
     qdl: "queue.Queue[Optional[DownloadTask]]" = queue.Queue(maxsize=args.workers * 2)
     workers: List[threading.Thread] = []
-    for i in range(args.workers):
-        t = threading.Thread(
-            target=download_worker,
-            args=(f"W{i+1}", qdl, reg, session, crumbs, not args.no_live_pane, args.dry_run),
-            daemon=True
-        )
-        t.start()
-        workers.append(t)
+
+    if not args.dry_run:
+        for i in range(args.workers):
+            t = threading.Thread(
+                target=download_worker,
+                args=(f"W{i+1}", qdl, reg, session, crumbs, not args.no_live_pane),
+                daemon=True,
+            )
+            t.start()
+            workers.append(t)
 
     global_seen_urls: Set[str] = set()
     url_posts: Dict[str, Set[str]] = {}
@@ -1159,51 +1331,31 @@ def main():
         qdl.join()
         for t in workers:
             t.join(timeout=1)
-    else:
-        for _ in workers:
-            qdl.put(None)
 
-    renderer.stop()
-    try:
+    if renderer is not None:
+        renderer.stop()
         renderer.join(timeout=1)
-    except RuntimeError:
-        pass
 
     duplicate_urls = {u: sorted(list(posts)) for u, posts in url_posts.items() if len(posts) > 1}
     duplicate_url_count = len(duplicate_urls)
     duplicate_occurrences = tally.discovered_total - tally.enqueued_total
 
-    user_root = os.path.join(args.out, resolved_source, resolved_user)
-    state_path = os.path.join(user_root, ".state.jsonl")
-    state_media_paths = load_state_media_paths(state_path)
-    disk_media_paths = list_disk_media(user_root)
-    extra_on_disk = sorted(disk_media_paths - state_media_paths)
-    missing_on_disk = sorted(state_media_paths - disk_media_paths)
+    base_out = os.path.join(args.out, resolved_source, resolved_user)
 
     if args.dry_run:
         print("Dry run summary")
-        print(f"Output root: {user_root}")
+        print(f"Output root: {base_out}")
         print(f"Pages: {res['pages']}")
         print(f"Posts per page: {res['posts_per_page']}")
         print(f"Media enqueued per page: {res['media_per_page']}")
         print(f"Total posts: {res['total_posts']}")
         print(f"Total media found: {tally.discovered_total}  (images: {tally.discovered_images}, videos: {tally.discovered_videos})")
-        print(f"Total unique media enqueued: {tally.enqueued_total}  (images: {tally.enqueued_images}, videos: {tally.enqueued_videos})")
+        print(f"Total unique media (would enqueue): {tally.enqueued_total}  (images: {tally.enqueued_images}, videos: {tally.enqueued_videos})")
         print(f"Duplicates across posts (urls): {duplicate_url_count}  (duplicate occurrences skipped: {duplicate_occurrences})")
-        print("\nAudit (dry run)")
-        print("---------------")
-        print(f"Tracked in state: {len(state_media_paths)}")
-        print(f"Found on disk:    {len(disk_media_paths)}")
-        print(f"Extra on disk (not in state): {len(extra_on_disk)}")
-        for f in extra_on_disk[:100]:
-            print("  ", f)
-        print(f"Missing on disk (in state but not on disk): {len(missing_on_disk)}")
-        for f in missing_on_disk[:100]:
-            print("  ", f)
         return
 
     print("Download summary")
-    print(f"Output root: {user_root}")
+    print(f"Output root: {base_out}")
     print(f"Pages crawled: {res['pages']}")
     print(f"Posts per page: {res['posts_per_page']}")
     print(f"Media enqueued per page: {res['media_per_page']}")
@@ -1212,8 +1364,8 @@ def main():
     print(f"Total unique media enqueued: {tally.enqueued_total}  (images: {tally.enqueued_images}, videos: {tally.enqueued_videos})")
     print(f"Duplicates across posts (urls): {duplicate_url_count}  (duplicate occurrences skipped: {duplicate_occurrences})")
 
-    images_dir = os.path.join(user_root, "images")
-    videos_dir = os.path.join(user_root, "videos")
+    images_dir = os.path.join(base_out, "images")
+    videos_dir = os.path.join(base_out, "videos")
 
     all_dl = set(crumbs.downloaded_urls)
     all_expected_images = sum(1 for u in all_dl if is_image_url(u))
@@ -1253,7 +1405,7 @@ def main():
             username=resolved_user,
             session=session,
             crumbs=crumbs,
-            verbose=True
+            verbose=True,
         )
 
         actual_images = count_files_with_exts(images_dir, ACCEPTABLE_IMAGE_EXT)
@@ -1269,32 +1421,38 @@ def main():
             if len(bad_urls) > max_show:
                 print(f"  ... and {len(bad_urls) - max_show} more")
             print("   (These may be transient CDN issues, removed sources, or blocked by the remote host.)")
-        else:
-            print("\n✅ All previously missing files were recovered.")
     else:
         print("\n✅ Folder contents match breadcrumbs. Looks tight.")
 
     print("\nAudit")
     print("------")
-    print(f"Tracked in state: {len(state_media_paths)}")
-    print(f"Found on disk:    {len(disk_media_paths)}")
-    print(f"Extra on disk (not in state): {len(extra_on_disk)}")
-    for f in extra_on_disk[:100]:
-        print("  ", f)
-    print(f"Missing on disk (in state but not on disk): {len(missing_on_disk)}")
-    for f in missing_on_disk[:100]:
-        print("  ", f)
+    state_files = state_media_set(crumbs)
+    disk_files = disk_media_set(images_dir, videos_dir)
+
+    extra = sorted(disk_files - state_files)
+    missing_disk = sorted(state_files - disk_files)
+
+    print(f"Extra files on disk (not in state): {len(extra)}")
+    for f in extra[:200]:
+        print("   ", f)
+    if len(extra) > 200:
+        print(f"   ... and {len(extra) - 200} more")
+
+    print(f"Missing files on disk (in state but not on disk): {len(missing_disk)}")
+    for f in missing_disk[:200]:
+        print("   ", f)
+    if len(missing_disk) > 200:
+        print(f"   ... and {len(missing_disk) - 200} more")
 
     if duplicate_url_count:
         print(f"\nDuplicate URLs across posts: {duplicate_url_count}  (occurrences skipped: {duplicate_occurrences})")
         max_urls = 50
         max_posts = 5
         for i, (u, posts) in enumerate(list(duplicate_urls.items())[:max_urls], start=1):
-            show_posts = posts[:max_posts]
             print(f"  {i:3d}. {u}")
-            for j, purl in enumerate(show_posts, start=1):
+            for j, purl in enumerate(posts[:max_posts], start=1):
                 print(f"       - post {j}: {purl}")
-            more = len(posts) - len(show_posts)
+            more = len(posts) - min(len(posts), max_posts)
             if more > 0:
                 print(f"       ... and {more} more post(s)")
     else:
