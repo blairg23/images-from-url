@@ -7,7 +7,7 @@ Concurrent gallery scraper - Playwright or HTTP-only - with:
 • One bar per active download; finished bars disappear (configurable)
 • Resume via breadcrumbs; skip existing files; size filter
 • Beginning-of-run simple retry for last-run failures (single GET)
-• End-of-run verification + audit (extra/missing vs state)
+• End-of-run verification + audit (URL-based missing; path-based extras)
 • Global duplicate tracking across posts (with per-URL list of post pages)
 
 Output layout:
@@ -343,10 +343,9 @@ class Breadcrumbs:
                     elif t == "media_failed" and rec.get("url"):
                         prev = self.failed_urls.get(rec["url"], {})
                         count = prev.get("count") or 0
-                        # prefer newest values
                         self.failed_urls[rec["url"]] = {
-                            "referer": rec.get("referer",""),
-                            "reason": rec.get("reason",""),
+                            "referer": rec.get("referer","") or prev.get("referer","") or "",
+                            "reason": rec.get("reason","") or prev.get("reason","") or "",
                             "count": max(count, int(rec.get("count", 1) or 1))
                         }
         except Exception:
@@ -434,7 +433,6 @@ class ProgressRegistry:
             else: b.failed = True
             b.last_update = time.time()
             if not self.leave_completed:
-                # remove immediately; keeps pane small
                 del self._bars[bar_id]
                 self._meta.pop(bar_id, None)
 
@@ -469,7 +467,6 @@ class PinnedRenderer(threading.Thread):
         self._stop_evt = threading.Event()
         self._initialized = False
         self._title = title
-        self._started_ok = False
 
     def stop(self):
         self._stop_evt.set()
@@ -488,7 +485,6 @@ class PinnedRenderer(threading.Thread):
         try:
             if self.ansi and not self._initialized:
                 self._init_pane()
-            self._started_ok = True
             while not self._stop_evt.is_set():
                 snap = self.reg.snapshot()
                 if self.ansi:
@@ -626,7 +622,7 @@ def size_filter_with_trust(pairs: List[Tuple[str, bool]],
         if sz is None or sz >= min_bytes:
             kept.append(u)
         else:
-            vlog(verbose, f"  └─ skip small {sz} B (< {min_bytes} B): {u}")
+            vlog(verbose, f"  - skip small {sz} B (< {min_bytes} B): {u}")
             dprint(debug, f"skip small ({sz} B < {min_bytes} B): {u}")
     return kept
 
@@ -775,15 +771,15 @@ def crawl_playwright(
                     pairs = collect_media_pairs(html, post_url)
                     media_urls_all = [u for (u, _) in pairs]
                     imgs_all, vids_all = count_kinds(media_urls_all)
-                    vlog(verbose, f"  ├─ found {len(media_urls_all)} media ({imgs_all} images, {vids_all} videos)")
+                    vlog(verbose, f"  | found {len(media_urls_all)} media ({imgs_all} images, {vids_all} videos)")
                     if verbose and print_urls:
-                        for u in media_urls_all: vlog(True, f"  │   {u}")
+                        for u in media_urls_all: vlog(True, f"  |   {u}")
 
                     media_urls = size_filter_with_trust(pairs, session, min_bytes, verbose, debug, referer=post_url)
                     imgs, vids = count_kinds(media_urls)
                     tally.discovered_images += imgs
                     tally.discovered_videos += vids
-                    vlog(verbose, f"  ├─ kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
+                    vlog(verbose, f"  | kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
 
                     # enqueue downloads with global de-dupe across posts
                     seen_in_post: Set[str] = set()
@@ -795,7 +791,7 @@ def crawl_playwright(
                         url_posts.setdefault(u, set()).add(post_url)
 
                         if u in global_seen_urls:
-                            dprint(debug, f"  └─ global-dup (skip enqueue): {u}")
+                            dprint(debug, f"  - global dup (skip enqueue): {u}")
                             continue
 
                         global_seen_urls.add(u)
@@ -810,7 +806,7 @@ def crawl_playwright(
 
                     post.close()
                 except Exception as e:
-                    vlog(verbose, f"  └─ ERROR visiting post: {e}")
+                    vlog(verbose, f"  - ERROR visiting post: {e}")
 
             media_per_page.append(page_media_enqueued)
 
@@ -924,15 +920,15 @@ def crawl_http(
                 pairs = collect_media_pairs(html_post, post_url)
                 media_urls_all = [u for (u, _) in pairs]
                 imgs_all, vids_all = count_kinds(media_urls_all)
-                vlog(verbose, f"  ├─ found {len(media_urls_all)} media ({imgs_all} images, {vids_all} videos)")
+                vlog(verbose, f"  | found {len(media_urls_all)} media ({imgs_all} images, {vids_all} videos)")
                 if verbose and print_urls:
-                    for u in media_urls_all: vlog(True, f"  │   {u}")
+                    for u in media_urls_all: vlog(True, f"  |   {u}")
 
                 media_urls = size_filter_with_trust(pairs, session, min_bytes, verbose, debug, referer=post_url)
                 imgs, vids = count_kinds(media_urls)
                 tally.discovered_images += imgs
                 tally.discovered_videos += vids
-                vlog(verbose, f"  ├─ kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
+                vlog(verbose, f"  | kept {len(media_urls)} after size filter ({imgs} images, {vids} videos)")
 
                 seen_in_post: Set[str] = set()
                 for u in media_urls:
@@ -943,7 +939,7 @@ def crawl_http(
                     url_posts.setdefault(u, set()).add(post_url)
 
                     if u in global_seen_urls:
-                        dprint(debug, f"  └─ global-dup (skip enqueue): {u}")
+                        dprint(debug, f"  - global dup (skip enqueue): {u}")
                         continue
 
                     global_seen_urls.add(u)
@@ -956,7 +952,7 @@ def crawl_http(
                     elif is_video_url(u):
                         tally.enqueued_videos += 1
             else:
-                vlog(verbose, "  └─ ERROR fetching post")
+                vlog(verbose, "  - ERROR fetching post")
 
             time.sleep(0.02)
 
@@ -1022,7 +1018,7 @@ def retry_missing_downloads(missing_urls: List[str],
             except Exception:
                 pass
             bad.append(u)
-            vlog(True, f"  ✖ retry failed: {u}  ({e})")
+            vlog(True, f"  x retry failed: {u}  ({e})")
     return ok, bad
 
 def list_disk_media(root_images: str, root_videos: str) -> Set[str]:
@@ -1162,7 +1158,6 @@ def main():
     session = requests.Session()
     session.headers.update({"User-Agent": UA})
     crumbs = Breadcrumbs(args.out, resolved_source, resolved_user, enable=use_resume)
-    prev_downloaded = set(crumbs.downloaded_urls)  # snapshot for "this run" deltas
 
     # Pre-run: try to recover last-run failures once, sequentially (no workers)
     prerun_fetch_failures(args.out, resolved_source, resolved_user, session, crumbs, args.dry_run)
@@ -1174,9 +1169,8 @@ def main():
         renderer.start()
     except RuntimeError as e:
         sys.stderr.write(f"[warn] live pane disabled: {e}\n")
-        renderer.live = False
 
-    # Worker pool
+    # Worker pool (only if not dry-run)
     qdl: "queue.Queue[Optional[DownloadTask]]" = queue.Queue(maxsize=args.workers * 2)
     workers: List[threading.Thread] = []
     if not args.dry_run:
@@ -1247,7 +1241,7 @@ def main():
         for t in workers:
             t.join(timeout=1)
 
-    # Stop renderer (guard against start failure)
+    # Stop renderer
     try:
         renderer.stop()
         renderer.join(timeout=1)
@@ -1281,19 +1275,18 @@ def main():
         print(f"Total unique media enqueued: {tally.enqueued_total}  (images: {tally.enqueued_images}, videos: {tally.enqueued_videos})")
         print(f"Duplicates across posts (urls): {duplicate_url_count}  (duplicate occurrences skipped: {duplicate_occurrences})")
 
-    # ---- verification summary ----
+    # ---- verification + audit ----
     images_dir = os.path.join(args.out, resolved_source, resolved_user, "images")
     videos_dir = os.path.join(args.out, resolved_source, resolved_user, "videos")
 
-    # All-time (everything breadcrumbs knows about)
-    all_dl = set(crumbs.downloaded_urls)
-    all_expected_images = sum(1 for u in all_dl if is_image_url(u))
-    all_expected_videos = sum(1 for u in all_dl if is_video_url(u))
+    # All-time (every URL breadcrumbs knows about)
+    all_dl_urls: Set[str] = set(crumbs.downloaded_urls)
+    all_expected_images = sum(1 for u in all_dl_urls if is_image_url(u))
+    all_expected_videos = sum(1 for u in all_dl_urls if is_video_url(u))
 
-    # This run only (new successes)
-    new_dl = all_dl - prev_downloaded
-    run_expected_images = sum(1 for u in new_dl if is_image_url(u))
-    run_expected_videos = sum(1 for u in new_dl if is_video_url(u))
+    # This run expected = what we actually enqueued this run (not "new in state")
+    run_expected_images = tally.enqueued_images
+    run_expected_videos = tally.enqueued_videos
 
     # On-disk counts right now
     actual_images = count_files_with_exts(images_dir, ACCEPTABLE_IMAGE_EXT)
@@ -1305,36 +1298,55 @@ def main():
     print(f"All-time expected (per breadcrumbs):\n  images: {all_expected_images}\n  videos: {all_expected_videos}")
     print(f"On disk now:\n  images: {actual_images}  ({images_dir})\n  videos: {actual_videos}  ({videos_dir})")
 
-    # Extra/missing vs state.jsonl by path
-    # Build path sets from state and disk and compare
+    # Path-based extras vs state
     state_paths: Set[str] = set()
+    urls_with_paths: Set[str] = set()
     for url, meta in crumbs.url_records.items():
         rel = to_media_rel(meta.get("path","") or "")
         if rel:
             state_paths.add(rel)
+            urls_with_paths.add(url)
 
     disk_paths = list_disk_media(images_dir, videos_dir)
+    extras_by_path = sorted(disk_paths - state_paths)
 
-    extras = sorted(disk_paths - state_paths)
-    missing = sorted(state_paths - disk_paths)
+    # URL-based missing (authoritative)
+    missing_by_url = []
+    for u in sorted(all_dl_urls):
+        found = file_exists_for_url(args.out, resolved_source, resolved_user, u)
+        if not found:
+            expected_name = filename_from_url(u)
+            leaf = "images" if is_image_url(u) else "videos" if is_video_url(u) else "other"
+            last_path = (crumbs.url_records.get(u) or {}).get("path", "") or "n/a"
+            missing_by_url.append({
+                "url": u,
+                "expected": f"{leaf}/{expected_name}",
+                "last_path": last_path
+            })
 
     print("\nAudit")
     print("------")
-    print(f"Extra files on disk (not in state): {len(extras)}")
-    if extras:
-        max_show = 100
-        for f in extras[:max_show]:
-            print(f"  {f}")
-        if len(extras) > max_show:
-            print(f"  ... and {len(extras) - max_show} more")
+    print(f"State URLs total: {len(all_dl_urls)}  (with recorded paths: {len(urls_with_paths)})")
+    if len(urls_with_paths) != len(all_dl_urls):
+        print("! Warning: some downloaded URLs have no recorded file path; URL-based audit will catch missing files even when path-based cannot.")
 
-    print(f"Missing files on disk (in state but not on disk): {len(missing)}")
-    if missing:
+    print(f"Extra files on disk (not in state): {len(extras_by_path)}")
+    if extras_by_path:
         max_show = 100
-        for f in missing[:max_show]:
+        for f in extras_by_path[:max_show]:
             print(f"  {f}")
-        if len(missing) > max_show:
-            print(f"  ... and {len(missing) - max_show} more")
+        if len(extras_by_path) > max_show:
+            print(f"  ... and {len(extras_by_path) - max_show} more")
+
+    print(f"Missing files (known in state but no file on disk): {len(missing_by_url)}")
+    if missing_by_url:
+        max_show = 100
+        for rec in missing_by_url[:max_show]:
+            print("  URL:", rec["url"])
+            print("    expected:", rec["expected"])
+            print("    last_path:", rec["last_path"])
+        if len(missing_by_url) > max_show:
+            print(f"  ... and {len(missing_by_url) - max_show} more")
 
     # Duplicates report
     if duplicate_url_count:
